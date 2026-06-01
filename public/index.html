@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProNet — Connect, Collaborate, Grow</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="hero">
+    <nav class="nav">
+      <div class="nav-left">
+        <a class="brand" href="/">P</a>
+        <div class="nav-links">
+          <a href="#">Home</a><a href="#">About</a><a href="#">Services</a><a href="#">Contact</a><a href="#">Blog</a>
+        </div>
+        <button class="menu-icon" aria-label="menu">☰</button>
+      </div>
+      <div class="nav-right">
+        <a href="#login" class="btn">Sign In</a>
+        <a href="/signup.html" class="btn btn-primary">Join Now</a>
+      </div>
+    </nav>
+    <div class="hero-inner">
+      <span class="pill">Unlock Your Professional Potential Today <a href="#">Discover More</a></span>
+      <h1>Connect, Collaborate, and<br/>Grow Your Network</h1>
+      <p>Join our community of professionals and enhance your career opportunities.</p>
+      <div class="hero-cta">
+        <a href="#" class="btn btn-outline">Learn More</a>
+        <a href="/signup.html" class="btn btn-primary">Get Started Now</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="demo-note" style="margin-top:24px">
+    👋 <b>Demo accounts:</b> sign in as any of the 15 seeded users — e.g. <code>aarav@pronet.com</code>, <code>priya@pronet.com</code>, <code>liam@pronet.com</code> — password <code>password123</code>. Or create a new account.
+  </div>
+
+  <section id="login" class="login-card">
+    <h2>Welcome Back!</h2>
+    <p class="sub">Log in to your professional network and connect with peers.</p>
+    <form id="login-form" novalidate>
+      <div class="field">
+        <label for="email">Email Address</label>
+        <input id="email" type="email" placeholder="Enter your email here" value="aarav@pronet.com" required />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="••••••••••" value="password123" required />
+      </div>
+      <div class="row-between">
+        <label class="check"><input type="checkbox" checked /> Remember Me</label>
+        <a href="#" class="link">Forgot Password?</a>
+      </div>
+      <p id="login-error" class="error"></p>
+      <button class="btn btn-primary btn-block" type="submit">Sign In</button>
+      <button type="button" id="google-btn" class="btn-google">
+        <span style="font-weight:800;color:#4285F4">G</span> Sign in with Google
+      </button>
+      <p class="center-muted">Don't have an account? <a class="link" href="/signup.html">Create one now!</a></p>
+    </form>
+  </section>
+
+  <section class="stay">
+    <div class="num">07</div>
+    <h2>Stay<br/>Connected</h2>
+  </section>
+  <div class="contact-grid">
+    <div><h4>Address</h4><p>123 Networking Ave, City, State</p></div>
+    <div><h4>Phone</h4><p>+1 (555) 123-4567</p></div>
+    <div><h4>Email</h4><p>info@professionalsnetwork.com</p></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/js/supabase-config.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    (async () => {
+      // If already signed in (either via Supabase or our local JWT), go to feed
+      if (localStorage.getItem('token')) { location.href = '/feed.html'; return; }
+      if (window.sb) {
+        const { data } = await window.sb.auth.getSession();
+        if (data && data.session) {
+          localStorage.setItem('token', data.session.access_token);
+          location.href = '/feed.html'; return;
+        }
+      }
+    })();
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const err = document.getElementById('login-error'); err.textContent = '';
+      // 1) Try Supabase
+      if (window.sb) {
+        const { data, error } = await window.sb.auth.signInWithPassword({ email, password });
+        if (!error && data.session) {
+          localStorage.setItem('token', data.session.access_token);
+          try { const me = await api('/api/me'); setMe(me.user); location.href = '/feed.html'; return; }
+          catch (ex) { err.textContent = 'Backend sync failed: ' + ex.message; return; }
+        }
+      }
+      // 2) Fallback: legacy email/password (for seeded demo users like aarav@pronet.com)
+      try {
+        const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+        localStorage.setItem('token', data.token); setMe(data.user);
+        location.href = '/feed.html';
+      } catch (ex) { err.textContent = ex.message; }
+    });
+
+    document.getElementById('google-btn').onclick = async () => {
+      if (!window.sb) { alert('Supabase is not configured.'); return; }
+      const { error } = await window.sb.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: location.origin + '/auth-callback.html' },
+      });
+      if (error) alert(error.message);
+    };
+  </script>
+</body>
+</html>

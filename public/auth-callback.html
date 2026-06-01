@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Signing you in… · ProNet</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="auth-bg">
+  <section class="auth-card" style="text-align:center">
+    <h1>Signing you in…</h1>
+    <p class="sub" id="msg">One moment while we finish setting up your account.</p>
+    <p class="error" id="err"></p>
+  </section>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/js/supabase-config.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    (async () => {
+      const err = document.getElementById('err');
+      const msg = document.getElementById('msg');
+      if (!window.sb) { err.textContent = 'Supabase not configured.'; return; }
+      try {
+        // supabase-js auto-handles the hash params; just wait then read session
+        await new Promise(r => setTimeout(r, 300));
+        const { data, error } = await window.sb.auth.getSession();
+        if (error) throw error;
+        if (!data.session) {
+          // Allow auth state change to fire (some flows are async)
+          await new Promise(resolve => {
+            const t = setTimeout(resolve, 2000);
+            window.sb.auth.onAuthStateChange((_e, sess) => { if (sess) { clearTimeout(t); resolve(); }});
+          });
+          const r2 = await window.sb.auth.getSession();
+          if (!r2.data.session) throw new Error('No session returned.');
+          localStorage.setItem('token', r2.data.session.access_token);
+        } else {
+          localStorage.setItem('token', data.session.access_token);
+        }
+        msg.textContent = 'Loading your profile…';
+        const me = await api('/api/me');
+        setMe(me.user);
+        location.href = '/feed.html';
+      } catch (ex) {
+        err.textContent = ex.message + ' — redirecting…';
+        setTimeout(() => location.href = '/', 3000);
+      }
+    })();
+  </script>
+</body>
+</html>
