@@ -15,3 +15,5 @@ services:
         value: https://blycpujwjxlhpxcnlhtd.supabase.co
       - key: SUPABASE_KEY
         value: sb_publishable_0ujr8vfRd4xxwU2_5svIHg_s3voW9wg
+      - key: DATABASE_URL
+        sync: false   # set this manually in the Render dashboard (contains DB password)

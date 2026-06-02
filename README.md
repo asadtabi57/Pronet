@@ -1,28 +1,30 @@
-# ProNet — LinkedIn Clone
+# Pronet
 
-Full-stack LinkedIn-style social network with Supabase auth, reactions, posts, messaging, payments, and more.
+LinkedIn-style social platform — Node.js + Express + Supabase Postgres.
 
 ## Local dev
 
 ```bash
 npm install
+cp .env.example .env    # fill in DATABASE_URL, SUPABASE_*, JWT_SECRET
+node apply-schema.js    # one-time: create tables in Supabase
+node migrate-data.js    # one-time (optional): seed from data/db.json
 node server.js
 ```
 
-Visit http://localhost:3000
-
-## Deploy to Render
-
-This repo includes `render.yaml`. After pushing to GitHub:
-
-1. Go to https://dashboard.render.com → New → Blueprint
-2. Connect this repo → Render reads `render.yaml` and provisions the service
-3. Wait for first deploy (~3 min)
-4. In Supabase dashboard → Authentication → URL Configuration, set Site URL + Redirect URLs to your Render URL
+Open http://localhost:3000
 
 ## Stack
+- **Frontend:** Vanilla HTML/CSS/JS (`public/`)
+- **Backend:** Node.js + Express (`server.js`)
+- **Database:** Supabase Postgres (9 tables — see `schema.sql`)
+- **Auth:** Supabase (email + Google) with legacy JWT fallback
+- **Uploads:** Local disk under `public/uploads/`
 
-- Backend: Node.js + Express, JSON file store
-- Auth: Supabase (email + Google OAuth) with legacy JWT fallback
-- Frontend: Vanilla HTML/CSS/JS
-- Payments: Stripe-ready (sandbox by default)
+## Deploy to Render
+Blueprint config in `render.yaml`. After first deploy, set `DATABASE_URL` in the
+Render dashboard (it's marked `sync: false` so it isn't pulled from this repo).
+
+## Seed credentials (after running `migrate-data.js`)
+- Email: any seeded user (e.g. `aarav@pronet.com`)
+- Password: `password123`

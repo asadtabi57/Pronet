@@ -4,5 +4,6 @@ public/uploads/
 .env
 .env.local
 *.log
+*.bak
 .DS_Store
 Thumbs.db
