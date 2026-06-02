@@ -35,7 +35,7 @@
     const { user, messages } = await api(`/api/messages/${userId}`);
     convEl.innerHTML = `
       <div class="msg-conv-head">
-        <a href="#" id="back" style="display:none">← </a>
+        <button type="button" id="back" class="msg-back" aria-label="Back">←</button>
         ${avatar(user, 'md')}
         <div>
           <div style="font-weight:700">${escapeHTML(user.name)}</div>
@@ -70,6 +70,8 @@
       openConv(userId);
       loadThreads();
     };
+    const backBtn = document.getElementById('back');
+    if (backBtn) backBtn.onclick = () => shell.classList.remove('show-conv');
     loadThreads();
   }
 

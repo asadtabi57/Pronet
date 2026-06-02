@@ -1156,6 +1156,7 @@ body.app {
   .msg-shell .msg-conv { display: none; }
   .msg-shell.show-conv .msg-list { display: none; }
   .msg-shell.show-conv .msg-conv { display: flex; }
+  .msg-back { display: inline-flex !important; }
 
   .plans { grid-template-columns: 1fr; }
   .person-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
@@ -1169,4 +1170,18 @@ body.app {
   .search input { width: 140px; }
   .app-nav-inner { gap: 6px; padding: 6px 12px; }
   .layout { padding: 0 16px; }
+  .person-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .composer textarea { font-size: 15px; }
+  .post-actions .label { display: none; }
+  .modal-content { margin: 16px; padding: 20px; }
 }
+
+/* Back button (visible only on mobile via media query above) */
+.msg-back {
+  display: none; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--hover); border: 0; cursor: pointer;
+  font-size: 18px; color: var(--ink); margin-right: 4px;
+  transition: background var(--t-fast);
+}
+.msg-back:hover { background: var(--line); }
