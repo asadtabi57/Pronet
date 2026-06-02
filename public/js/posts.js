@@ -176,12 +176,7 @@ function wirePost(el, p, opts = {}) {
   el.querySelector('.comment-btn').onclick = () => toggleComments(el, id);
   el.querySelector('.repost-btn').onclick = () => openRepostModal(p, opts.onChange);
   el.querySelector('.send-btn').onclick = () => openSendModal(p);
-  el.querySelector('.share-btn').onclick = async () => {
-    const url = `${location.origin}/feed.html#post-${id}`;
-    try { await navigator.clipboard.writeText(url); toast('Link copied to clipboard'); }
-    catch { prompt('Copy this link:', url); }
-    await api(`/api/posts/${id}/share`, { method: 'POST' });
-  };
+  el.querySelector('.share-btn').onclick = () => openShareSheet(p);
   const more = el.querySelector('.more');
   const me = getMe();
   if (me && p.user_id === me.id) {
@@ -271,4 +266,137 @@ async function openSendModal(p) {
     await api(`/api/posts/${p.id}/send`, { method: 'POST', body: { to_user_id, note } });
     m.close(); toast('Message sent');
   };
+}
+
+// ===== LinkedIn-style share sheet (bottom-drawer on mobile, modal on desktop) =====
+async function openShareSheet(p) {
+  const url = `${location.origin}/feed.html#post-${p.id}`;
+  const text = `Check out this post on Pronet: ${url}`;
+
+  // Backdrop + sheet
+  const back = document.createElement('div');
+  back.className = 'share-back';
+  back.innerHTML = `
+    <div class="share-sheet" role="dialog" aria-label="Share post">
+      <div class="share-grab"></div>
+      <h3 class="share-title">Send as message</h3>
+      <div class="share-search">
+        <input type="text" placeholder="Search connections" id="ss-search" />
+      </div>
+      <div class="share-people" id="ss-people">
+        <div class="share-empty">Loading…</div>
+      </div>
+      <div class="share-divider"></div>
+      <div class="share-actions">
+        <button class="share-act" data-act="native">
+          <span class="share-ico share-ico-blue">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          </span>
+          <span>Share via</span>
+        </button>
+        <button class="share-act" data-act="copy">
+          <span class="share-ico share-ico-gray">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </span>
+          <span>Copy link</span>
+        </button>
+        <a class="share-act" data-act="wa" href="https://api.whatsapp.com/send?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">
+          <span class="share-ico share-ico-wa">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M17.5 14.4c-.3-.1-1.7-.8-1.9-.9-.3-.1-.5-.1-.7.1-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-.3-.1-1.2-.4-2.3-1.4-.9-.7-1.4-1.7-1.6-2-.2-.3 0-.5.1-.6.1-.1.3-.3.4-.5.1-.2.2-.3.2-.5.1-.2 0-.4 0-.5-.1-.1-.7-1.6-.9-2.2-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.3 5.2 4.6.7.3 1.3.5 1.7.6.7.2 1.4.2 1.9.1.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4-.1-.1-.3-.2-.6-.3zM12 2C6.5 2 2 6.5 2 12c0 1.8.5 3.5 1.3 5L2 22l5.1-1.3c1.4.8 3.1 1.3 4.9 1.3 5.5 0 10-4.5 10-10S17.5 2 12 2z"/></svg>
+          </span>
+          <span>WhatsApp</span>
+        </a>
+        <a class="share-act" data-act="sms" href="sms:?body=${encodeURIComponent(text)}">
+          <span class="share-ico share-ico-msg">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </span>
+          <span>Messages</span>
+        </a>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => back.classList.add('open'));
+
+  function close() {
+    back.classList.remove('open');
+    document.body.style.overflow = '';
+    setTimeout(() => back.remove(), 220);
+  }
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+
+  // Swipe-to-dismiss on mobile
+  const sheet = back.querySelector('.share-sheet');
+  let startY = 0, dy = 0, dragging = false;
+  sheet.addEventListener('touchstart', (e) => {
+    if (window.innerWidth > 600) return;
+    startY = e.touches[0].clientY; dragging = true; sheet.style.transition = 'none';
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    dy = Math.max(0, e.touches[0].clientY - startY);
+    sheet.style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+  sheet.addEventListener('touchend', () => {
+    if (!dragging) return;
+    sheet.style.transition = '';
+    if (dy > 100) close();
+    else sheet.style.transform = '';
+    dragging = false; dy = 0;
+  });
+
+  // Actions
+  back.querySelector('[data-act="copy"]').onclick = async (e) => {
+    e.preventDefault();
+    try { await navigator.clipboard.writeText(url); toast('Link copied!'); }
+    catch { prompt('Copy this link:', url); }
+    await api(`/api/posts/${p.id}/share`, { method: 'POST' });
+    close();
+  };
+  const nativeBtn = back.querySelector('[data-act="native"]');
+  if (navigator.share) {
+    nativeBtn.onclick = async (e) => {
+      e.preventDefault();
+      try { await navigator.share({ title: 'Pronet post', text, url }); close(); }
+      catch (err) {}
+    };
+  } else {
+    nativeBtn.style.opacity = '0.5';
+    nativeBtn.onclick = (e) => { e.preventDefault(); toast('Not supported here'); };
+  }
+  back.querySelectorAll('[data-act="wa"], [data-act="sms"]').forEach(a => {
+    a.addEventListener('click', () => setTimeout(close, 100));
+  });
+
+  // Load connections horizontally
+  try {
+    const { connections } = await api('/api/connections');
+    const peopleEl = back.querySelector('#ss-people');
+    if (!connections.length) {
+      peopleEl.innerHTML = '<div class="share-empty">No connections yet — visit My Network</div>';
+    } else {
+      renderPeople(connections);
+      function renderPeople(list) {
+        peopleEl.innerHTML = list.map(c => `
+          <button class="share-person" data-id="${c.id}">
+            ${avatar(c, 'lg')}
+            <span class="share-pname">${escapeHTML((c.name || '').split(' ').slice(0, 2).join(' '))}</span>
+          </button>`).join('');
+        peopleEl.querySelectorAll('.share-person').forEach(node => {
+          node.onclick = async () => {
+            const to_user_id = +node.dataset.id;
+            await api(`/api/posts/${p.id}/send`, { method: 'POST', body: { to_user_id, note: '' } });
+            toast('Sent as message'); close();
+          };
+        });
+      }
+      const search = back.querySelector('#ss-search');
+      search.oninput = () => {
+        const q = search.value.toLowerCase().trim();
+        renderPeople(q ? connections.filter(c => (c.name || '').toLowerCase().includes(q)) : connections);
+      };
+    }
+  } catch (e) {
+    back.querySelector('#ss-people').innerHTML = '<div class="share-empty">Could not load connections</div>';
+  }
 }

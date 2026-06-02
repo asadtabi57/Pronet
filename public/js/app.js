@@ -229,6 +229,31 @@ async function renderNav(activeTab) {
       } catch (e) {}
     }, 30000);
   }
+
+  // Scroll direction → toggle body.scroll-down so sidebars collapse for more feed room
+  if (!window.__scrollDirStarted) {
+    window.__scrollDirStarted = true;
+    let lastY = window.scrollY;
+    let ticking = false;
+    const THRESHOLD = 8;
+    window.addEventListener('scroll', () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        const dy = y - lastY;
+        if (y < 80) {
+          document.body.classList.remove('scroll-down');
+        } else if (dy > THRESHOLD) {
+          document.body.classList.add('scroll-down');
+        } else if (dy < -THRESHOLD) {
+          document.body.classList.remove('scroll-down');
+        }
+        lastY = y;
+        ticking = false;
+      });
+    }, { passive: true });
+  }
 }
 
 // ===== Live search typeahead =====
