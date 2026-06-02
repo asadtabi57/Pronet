@@ -848,15 +848,22 @@ body.app {
   display: flex; gap: 14px; padding: 16px 20px;
   border-bottom: 1px solid var(--line-2);
   transition: background var(--t-fast);
+  align-items: center;
 }
 .notif:hover { background: var(--hover); }
 .notif.unread { background: #f0f7ff; }
 .notif.unread:hover { background: #e8f1fc; }
 .notif:last-child { border-bottom: none; }
-.notif .body { flex: 1; }
+.notif-main { display: flex; gap: 14px; align-items: center; flex: 1; color: inherit; text-decoration: none; min-width: 0; }
+.notif .body { flex: 1; min-width: 0; }
 .notif .text { font-size: var(--fs-14); color: var(--ink-2); line-height: 1.5; }
 .notif .text b { font-weight: 700; color: var(--ink); }
 .notif .time { color: var(--muted); font-size: var(--fs-12); margin-top: 4px; }
+.notif-actions { display: flex; gap: 8px; flex-shrink: 0; }
+@media (max-width: 600px) {
+  .notif-request { flex-wrap: wrap; }
+  .notif-request .notif-actions { width: 100%; padding-left: 56px; }
+}
 
 /* ==========================================================================
    MODAL

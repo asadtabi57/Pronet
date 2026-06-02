@@ -37,24 +37,56 @@
     });
   }
 
-  async function loadSuggestions() {
-    const { people } = await api('/api/people');
-    const el = document.getElementById('suggestions');
-    const unconnected = people.filter(p => !p.connected);
-    if (!unconnected.length) {
-      el.innerHTML = '<p class="empty">No more suggestions for now.</p>';
+  async function loadRequests() {
+    const { requests } = await api('/api/connections/requests');
+    const el = document.getElementById('requests');
+    const head = document.getElementById('requests-head');
+    if (!requests.length) {
+      el.innerHTML = '';
+      if (head) head.style.display = 'none';
       return;
     }
-    el.innerHTML = `<div class="person-grid">${unconnected.map(p => personCard(p, `
-      <button class="btn-fill connect-btn">+ Connect</button>
+    if (head) {
+      head.style.display = '';
+      head.querySelector('span').textContent = requests.length;
+    }
+    el.innerHTML = `<div class="person-grid">${requests.map(p => personCard(p, `
+      <button class="btn-fill accept-btn">Accept</button>
+      <button class="btn-tiny ghost decline-btn">Ignore</button>
     `)).join('')}</div>`;
     el.querySelectorAll('.person-card').forEach(node => {
-      node.querySelector('.connect-btn').onclick = async () => {
-        await api(`/api/people/${node.dataset.id}/connect`, { method: 'POST' });
-        toast('Connected!'); loadConnections(); loadSuggestions();
+      node.querySelector('.accept-btn').onclick = async () => {
+        await api(`/api/connections/${node.dataset.id}/accept`, { method: 'POST' });
+        toast('Connected!'); loadRequests(); loadConnections(); loadSuggestions();
+      };
+      node.querySelector('.decline-btn').onclick = async () => {
+        await api(`/api/connections/${node.dataset.id}/decline`, { method: 'POST' });
+        loadRequests();
       };
     });
   }
 
-  loadConnections(); loadSuggestions();
+  async function loadSuggestions() {
+    const { people } = await api('/api/people');
+    const el = document.getElementById('suggestions');
+    const unconnected = people.filter(p => !p.connected && !p.pending_in);
+    if (!unconnected.length) {
+      el.innerHTML = '<p class="empty">No more suggestions for now.</p>';
+      return;
+    }
+    el.innerHTML = `<div class="person-grid">${unconnected.map(p => personCard(p,
+      p.pending_out
+        ? `<button class="btn-tiny ghost" disabled>Pending</button>`
+        : `<button class="btn-fill connect-btn">+ Connect</button>`
+    )).join('')}</div>`;
+    el.querySelectorAll('.person-card .connect-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const card = btn.closest('.person-card');
+        await api(`/api/people/${card.dataset.id}/connect`, { method: 'POST' });
+        toast('Request sent'); loadSuggestions();
+      };
+    });
+  }
+
+  loadRequests(); loadConnections(); loadSuggestions();
 })();

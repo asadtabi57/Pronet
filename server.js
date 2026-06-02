@@ -111,7 +111,7 @@ async function publicUser(u, viewerId) {
   if (!u) return null;
   const uid = Number(u.id);
   const ccRes = await q(
-    `SELECT COUNT(*)::int AS c FROM connections WHERE user_a = $1 OR user_b = $1`, [uid]
+    `SELECT COUNT(*)::int AS c FROM connections WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`, [uid]
   );
   const out = {
     id: uid, name: u.name, email: u.email, headline: u.headline || '',
@@ -125,10 +125,19 @@ async function publicUser(u, viewerId) {
   };
   if (viewerId != null && viewerId !== uid) {
     const cn = await q(
-      `SELECT 1 FROM connections WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
+      `SELECT user_a, accepted FROM connections
+        WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
       [viewerId, uid]
     );
-    out.connected = cn.rowCount > 0;
+    out.connected = false;
+    out.pending_out = false;  // I sent a request to them
+    out.pending_in  = false;  // they sent a request to me
+    if (cn.rowCount > 0) {
+      const row = cn.rows[0];
+      if (row.accepted === 1) out.connected = true;
+      else if (Number(row.user_a) === Number(viewerId)) out.pending_out = true;
+      else out.pending_in = true;
+    }
   }
   return out;
 }
@@ -420,10 +429,11 @@ app.get('/api/search', authRequired, wrap(async (req, res) => {
     `SELECT u.id, u.name, u.email, u.headline, u.about, u.location,
             u.avatar_color, u.avatar_url, u.cover_color, u.skills,
             (SELECT COUNT(*)::int FROM connections c
-              WHERE c.user_a = u.id OR c.user_b = u.id) AS connection_count,
+              WHERE (c.user_a = u.id OR c.user_b = u.id) AND c.accepted = 1) AS connection_count,
             EXISTS (SELECT 1 FROM connections c
-              WHERE (c.user_a = $1 AND c.user_b = u.id)
-                 OR (c.user_b = $1 AND c.user_a = u.id)) AS connected
+              WHERE ((c.user_a = $1 AND c.user_b = u.id)
+                 OR (c.user_b = $1 AND c.user_a = u.id))
+                AND c.accepted = 1) AS connected
        FROM users u
       WHERE u.id <> $1 AND (
         LOWER(u.name) LIKE $2 OR LOWER(COALESCE(u.headline,'')) LIKE $2
@@ -465,7 +475,22 @@ app.post('/api/posts', authRequired, wrap(async (req, res) => {
      VALUES ($1,$2,$3,$4,$5) RETURNING id`,
     [req.user.id, (content || '').trim(), media_type || null, media_url || null, Date.now()]
   );
-  const post = await fetchOnePostDTO(ins.rows[0].id, req.user.id);
+  const postId = Number(ins.rows[0].id);
+  const post = await fetchOnePostDTO(postId, req.user.id);
+  // Notify all accepted connections about the new post
+  (async () => {
+    try {
+      const conns = await q(
+        `SELECT CASE WHEN user_a = $1 THEN user_b ELSE user_a END AS uid
+           FROM connections
+          WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`,
+        [req.user.id]
+      );
+      for (const row of conns.rows) {
+        await notify(Number(row.uid), 'new_post', req.user.id, { post_id: postId });
+      }
+    } catch (e) { console.error('new_post fan-out failed:', e.message); }
+  })();
   res.json({ post });
 }));
 
@@ -606,17 +631,54 @@ app.post('/api/people/:id/connect', authRequired, wrap(async (req, res) => {
   const u = await findUser(other);
   if (!u) return res.status(404).json({ error: 'User not found' });
   const exists = await q(
-    `SELECT 1 FROM connections WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
+    `SELECT user_a, user_b, accepted FROM connections
+      WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
     [req.user.id, other]
   );
   if (exists.rowCount === 0) {
+    // Send a new request (pending)
     await q(
-      `INSERT INTO connections (user_a, user_b, created_at) VALUES ($1,$2,$3)
-       ON CONFLICT DO NOTHING`,
+      `INSERT INTO connections (user_a, user_b, created_at, accepted)
+       VALUES ($1,$2,$3,0)`,
       [req.user.id, other, Date.now()]
     );
-    await notify(other, 'connect', req.user.id, {});
+    await notify(other, 'connection_request', req.user.id, {});
+    return res.json({ ok: true, status: 'pending' });
   }
+  const row = exists.rows[0];
+  if (row.accepted === 1) return res.json({ ok: true, status: 'connected' });
+  // Pending exists. If they sent it to me, accept it (mutual click).
+  if (Number(row.user_a) === other) {
+    await q(
+      `UPDATE connections SET accepted = 1
+        WHERE user_a = $1 AND user_b = $2`, [other, req.user.id]
+    );
+    await notify(other, 'connect_accepted', req.user.id, {});
+    return res.json({ ok: true, status: 'connected' });
+  }
+  // I already sent the request — no-op
+  res.json({ ok: true, status: 'pending' });
+}));
+
+app.post('/api/connections/:id/accept', authRequired, wrap(async (req, res) => {
+  const other = Number(req.params.id);
+  const upd = await q(
+    `UPDATE connections SET accepted = 1
+      WHERE user_a = $1 AND user_b = $2 AND accepted = 0 RETURNING 1`,
+    [other, req.user.id]
+  );
+  if (upd.rowCount === 0) return res.status(404).json({ error: 'No pending request' });
+  await notify(other, 'connect_accepted', req.user.id, {});
+  res.json({ ok: true });
+}));
+
+app.post('/api/connections/:id/decline', authRequired, wrap(async (req, res) => {
+  const other = Number(req.params.id);
+  await q(
+    `DELETE FROM connections
+      WHERE user_a = $1 AND user_b = $2 AND accepted = 0`,
+    [other, req.user.id]
+  );
   res.json({ ok: true });
 }));
 
@@ -633,13 +695,31 @@ app.get('/api/connections', authRequired, wrap(async (req, res) => {
   const r = await q(
     `SELECT u.* FROM users u
       JOIN connections c
-        ON (c.user_a = $1 AND c.user_b = u.id)
-        OR (c.user_b = $1 AND c.user_a = u.id)`,
+        ON ((c.user_a = $1 AND c.user_b = u.id)
+         OR (c.user_b = $1 AND c.user_a = u.id))
+       AND c.accepted = 1`,
     [req.user.id]
   );
   const out = [];
   for (const u of r.rows) out.push(await publicUser(u, req.user.id));
   res.json({ connections: out });
+}));
+
+// Pending connection requests sent TO me
+app.get('/api/connections/requests', authRequired, wrap(async (req, res) => {
+  const r = await q(
+    `SELECT u.*, c.created_at AS requested_at FROM users u
+       JOIN connections c ON c.user_a = u.id AND c.user_b = $1 AND c.accepted = 0
+      ORDER BY c.created_at DESC`,
+    [req.user.id]
+  );
+  const out = [];
+  for (const u of r.rows) {
+    const p = await publicUser(u, req.user.id);
+    p.requested_at = Number(u.requested_at);
+    out.push(p);
+  }
+  res.json({ requests: out });
 }));
 
 // --- Messaging ---
