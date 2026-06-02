@@ -82,10 +82,12 @@ html, body {
   font-size: 15px;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  width: 100%;
 }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
-img, video, svg { max-width: 100%; display: block; }
+img, video, svg, iframe { max-width: 100%; display: block; }
 input, textarea, select { font-family: inherit; }
 
 ::selection { background: var(--brand-soft); color: var(--ink); }
@@ -409,6 +411,7 @@ body.app {
   max-width: var(--container);
   margin: 24px auto;
   padding: 0 24px;
+  width: 100%;
   display: grid;
   gap: var(--gutter);
 }
@@ -535,9 +538,11 @@ body.app {
 .post-content {
   font-size: var(--fs-14); line-height: 1.6; color: var(--ink-2);
   white-space: pre-wrap; padding: 4px 0 2px;
+  overflow-wrap: anywhere; word-break: break-word;
 }
 
-.post-media { margin: 12px -18px 0; background: #000; }
+.post-media { margin: 12px -18px 0; background: #000; overflow: hidden; }
+.post-media iframe { width: 100%; height: 400px; max-height: 60vw; border: 0; display: block; }
 .post-media img, .post-media video {
   width: 100%; max-height: 560px; object-fit: cover; display: block;
 }
@@ -1156,8 +1161,10 @@ body.app {
   .stay h2 { font-size: 48px; }
   .nav-links { display: none; }
   .menu-icon { display: inline-block; }
-  .search input { width: 180px; }
   .nav-tab .label { display: none; }
+  .nav-tab { min-width: 0; padding: 6px 10px 4px; }
+  .search { flex: 1; min-width: 0; }
+  .search input { width: 100%; }
 
   .msg-shell { grid-template-columns: 1fr; height: calc(100vh - 100px); }
   .msg-shell .msg-conv { display: none; }
@@ -1174,11 +1181,21 @@ body.app {
   .login-card { margin: -40px 16px 0; padding: 24px; }
   .contact-grid { grid-template-columns: 1fr; gap: 18px; text-align: center; }
   .stay h2 { font-size: 36px; }
-  .search input { width: 140px; }
-  .app-nav-inner { gap: 6px; padding: 6px 12px; }
-  .layout { padding: 0 16px; }
+  .app-nav-inner { gap: 4px; padding: 6px 10px; height: 52px; }
+  .app-nav .brand { width: 32px; height: 32px; font-size: 13px; }
+  .nav-tabs { gap: 0; }
+  .nav-tab { padding: 6px 6px 4px; min-width: 36px; }
+  .nav-tab .icon { font-size: 18px; }
+  .nav-tab .badge { top: 0; right: 0; min-width: 16px; height: 16px; font-size: 9px; }
+  .search input { height: 36px; font-size: var(--fs-13); padding: 8px 10px 8px 34px; }
+  .search::before { left: 10px; width: 16px; height: 16px; }
+  .layout { padding: 0 12px; }
+  .card { border-radius: var(--r-md); }
+  .composer { padding: 12px; gap: 8px; }
+  .composer textarea { padding: 10px 14px; font-size: 14px; min-height: 42px; }
+  .post-body, .post-head, .post-actions, .post-stats { padding-left: 14px; padding-right: 14px; }
+  .post-media { margin-left: -14px; margin-right: -14px; }
   .person-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  .composer textarea { font-size: 15px; }
   .post-actions .label { display: none; }
   .modal-content { margin: 16px; padding: 20px; }
 }
