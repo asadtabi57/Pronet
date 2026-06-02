@@ -244,16 +244,35 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
 // Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
+const BUILD_ID = Date.now().toString(36);
+const fsSync = require('fs');
+// Auto-version CSS/JS in HTML so browsers always pick up the latest after deploy
+const htmlCache = new Map();
+app.get(/\.html$/, (req, res, next) => {
+  const filePath = path.join(__dirname, 'public', req.path);
+  const cacheKey = filePath + ':' + BUILD_ID;
+  let html = htmlCache.get(cacheKey);
+  if (!html) {
+    try {
+      html = fsSync.readFileSync(filePath, 'utf8');
+    } catch (e) { return next(); }
+    html = html.replace(/(src|href)="(\/[^"]+\.(?:css|js))"/g, `$1="$2?v=${BUILD_ID}"`);
+    htmlCache.set(cacheKey, html);
+  }
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
   lastModified: true,
   maxAge: '7d',
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
-      // Always revalidate HTML so users get latest navigation/links
       res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
     } else if (/\.(?:css|js|png|jpe?g|gif|webp|svg|ico|woff2?)$/i.test(filePath)) {
-      // Static-y assets: cache aggressively (no file hashing yet, so 7d is safe)
+      // Versioned via ?v= in HTML, so cache aggressively
       res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
     }
   },
