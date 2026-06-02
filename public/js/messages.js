@@ -9,11 +9,12 @@
 
   async function loadThreads() {
     const { threads } = await api('/api/messages/threads');
+    const head = '<div class="msg-list-head">Messaging</div>';
     if (!threads.length) {
-      listEl.innerHTML = '<p class="empty">No conversations yet.<br/>Start one from someone\'s profile.</p>';
+      listEl.innerHTML = head + '<p class="empty">No conversations yet.<br/>Start one from someone\'s profile.</p>';
       return;
     }
-    listEl.innerHTML = threads.map(t => `
+    listEl.innerHTML = head + threads.map(t => `
       <div class="msg-thread ${active === t.user.id ? 'active' : ''}" data-id="${t.user.id}">
         ${avatar(t.user, 'md')}
         <div class="body">
