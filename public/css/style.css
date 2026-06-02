@@ -339,3 +339,5 @@ body.app { background: var(--bg); }
   .search input { width: 120px; }
   .app-nav-inner { gap: 4px; padding: 6px 10px; }
 }
+
+.muted-small { font-size: 12px; color: #64748b; }

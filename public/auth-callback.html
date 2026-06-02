@@ -32,9 +32,9 @@
           });
           const r2 = await window.sb.auth.getSession();
           if (!r2.data.session) throw new Error('No session returned.');
-          localStorage.setItem('token', r2.data.session.access_token);
+          Session.setToken(r2.data.session.access_token);
         } else {
-          localStorage.setItem('token', data.session.access_token);
+          Session.setToken(data.session.access_token);
         }
         msg.textContent = 'Loading your profile…';
         const me = await api('/api/me');

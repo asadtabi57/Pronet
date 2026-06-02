@@ -1,0 +1,19 @@
+Lock down login: disable seeded accounts, enforce 5-min idle sessions
+
+- Block all 15 seeded demo users from /api/auth/login by clearing their
+  password_hash (their content stays visible in the feed; only new real
+  signups or Supabase-authenticated users can sign in)
+- Remove "Demo accounts" banner and pre-filled aarav@pronet.com/password123
+  on the landing page
+- Add proper autocomplete attributes (email, current-password,
+  new-password, name) so Chrome's password manager fills creds only when
+  the user has saved them
+- Move auth state from localStorage to sessionStorage (cleared on tab
+  close = true browser-session semantics)
+- Add 5-minute inactivity timeout: any mouse/keyboard/touch/scroll/click
+  refreshes the timer; a 15-second background interval auto-signs-out
+  idle sessions and shows a "Session expired" toast on the landing page
+- Update signup.html and auth-callback.html to use sessionStorage
+- Add small CSS helper class
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

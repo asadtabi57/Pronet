@@ -1,14 +1,65 @@
+// ===== Session management =====
+// - Token & profile live in sessionStorage (cleared on tab close → true browser session)
+// - 5-minute inactivity timeout: any mouse / keyboard / touch / scroll activity
+//   refreshes the timer. After 5 min idle the user is signed out automatically.
+// - A `last_activity` timestamp is shared via sessionStorage so navigating
+//   between pages doesn't reset the idle clock.
+
+const Session = (() => {
+  const IDLE_MS = 5 * 60 * 1000; // 5 minutes
+  const TOKEN_KEY = 'token';
+  const USER_KEY = 'user';
+  const LAST_KEY = 'last_activity';
+
+  function now() { return Date.now(); }
+
+  function setToken(t) {
+    sessionStorage.setItem(TOKEN_KEY, t);
+    sessionStorage.setItem(LAST_KEY, String(now()));
+  }
+  function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
+  function clear() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_KEY);
+    sessionStorage.removeItem(LAST_KEY);
+  }
+  function touch() {
+    if (sessionStorage.getItem(TOKEN_KEY)) {
+      sessionStorage.setItem(LAST_KEY, String(now()));
+    }
+  }
+  function lastActivity() {
+    const v = sessionStorage.getItem(LAST_KEY);
+    return v ? Number(v) : 0;
+  }
+  function isExpired() {
+    const last = lastActivity();
+    return last > 0 && (now() - last) > IDLE_MS;
+  }
+  function isValid() {
+    return !!getToken() && !isExpired();
+  }
+  function msRemaining() {
+    const last = lastActivity();
+    if (!last) return IDLE_MS;
+    return Math.max(0, IDLE_MS - (now() - last));
+  }
+  return { setToken, getToken, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
+})();
+
 // ===== Shared API + helpers =====
 async function api(path, { method = 'GET', body } = {}) {
+  // Enforce idle timeout before every request
+  if (Session.isExpired()) { await signOut('Session expired due to inactivity.'); throw new Error('Session expired'); }
+
   const headers = { 'Content-Type': 'application/json' };
-  let token = localStorage.getItem('token');
-  // Prefer the freshest Supabase access token (auto-refreshed by supabase-js)
+  let token = Session.getToken();
   if (window.sb) {
     try {
       const { data } = await window.sb.auth.getSession();
       if (data && data.session && data.session.access_token) {
         token = data.session.access_token;
-        localStorage.setItem('token', token);
+        Session.setToken(token);
       }
     } catch (e) {}
   }
@@ -18,13 +69,21 @@ async function api(path, { method = 'GET', body } = {}) {
   try { data = await res.json(); } catch (e) {}
   if (res.status === 401) { await signOut(); throw new Error('Unauthorized'); }
   if (!res.ok) throw new Error(data.error || ('Request failed: ' + res.status));
+  Session.touch();
   return data;
 }
 
-async function signOut() {
+async function signOut(reason) {
   try { if (window.sb) await window.sb.auth.signOut(); } catch (e) {}
-  localStorage.clear();
-  if (location.pathname !== '/' && location.pathname !== '/index.html') location.href = '/';
+  Session.clear();
+  // Some legacy code may have written to localStorage — wipe those keys too.
+  try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch (e) {}
+  if (reason) {
+    try { sessionStorage.setItem('signout_reason', reason); } catch (e) {}
+  }
+  if (location.pathname !== '/' && location.pathname !== '/index.html') {
+    location.href = '/';
+  }
 }
 
 function initials(name) {
@@ -52,12 +111,54 @@ function avatar(u, size = 'sm') {
   return `<div class="avatar ${size}" style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}</div>`;
 }
 
-function getMe() { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } }
-function setMe(u) { localStorage.setItem('user', JSON.stringify(u)); }
+function getMe() { try { return JSON.parse(sessionStorage.getItem('user') || 'null'); } catch { return null; } }
+function setMe(u) { sessionStorage.setItem('user', JSON.stringify(u)); Session.touch(); }
 function requireAuth() {
-  if (!localStorage.getItem('token')) { location.href = '/'; return false; }
+  if (!Session.isValid()) {
+    signOut(Session.getToken() ? 'Session expired due to inactivity.' : null);
+    return false;
+  }
   return true;
 }
+
+// ===== Inactivity tracker =====
+(function installIdleTracker() {
+  // If user lands here already idle (e.g. switched tabs > 5 min), sign out right away.
+  if (Session.isExpired()) {
+    signOut('Session expired due to inactivity.');
+    return;
+  }
+
+  // Throttled activity refresher (handles flood of mousemove events).
+  let lastTouch = 0;
+  function onActivity() {
+    const now = Date.now();
+    if (now - lastTouch > 5000) { // throttle to once every 5s
+      lastTouch = now;
+      Session.touch();
+    }
+  }
+  ['mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(ev =>
+    document.addEventListener(ev, onActivity, { passive: true })
+  );
+
+  // Periodic check (every 15s) so an idle tab still gets signed out.
+  setInterval(() => {
+    if (Session.getToken() && Session.isExpired()) {
+      signOut('Session expired due to inactivity.');
+    }
+  }, 15_000);
+
+  // Show a one-time toast on landing page if we were kicked out.
+  window.addEventListener('DOMContentLoaded', () => {
+    const reason = sessionStorage.getItem('signout_reason');
+    if (reason) {
+      sessionStorage.removeItem('signout_reason');
+      // Defer to ensure toast() is defined.
+      setTimeout(() => { try { toast(reason); } catch (e) { console.log(reason); } }, 100);
+    }
+  });
+})();
 
 // ===== Top nav =====
 async function renderNav(activeTab) {

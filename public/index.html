@@ -32,24 +32,22 @@
     </div>
   </header>
 
-  <div class="demo-note" style="margin-top:24px">
-    👋 <b>Demo accounts:</b> sign in as any of the 15 seeded users — e.g. <code>aarav@pronet.com</code>, <code>priya@pronet.com</code>, <code>liam@pronet.com</code> — password <code>password123</code>. Or create a new account.
-  </div>
-
   <section id="login" class="login-card">
     <h2>Welcome Back!</h2>
     <p class="sub">Log in to your professional network and connect with peers.</p>
-    <form id="login-form" novalidate>
+    <form id="login-form" novalidate autocomplete="on">
       <div class="field">
         <label for="email">Email Address</label>
-        <input id="email" type="email" placeholder="Enter your email here" value="aarav@pronet.com" required />
+        <input id="email" name="email" type="email" placeholder="you@example.com"
+               autocomplete="email" required />
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input id="password" type="password" placeholder="••••••••••" value="password123" required />
+        <input id="password" name="password" type="password" placeholder="••••••••••"
+               autocomplete="current-password" required />
       </div>
       <div class="row-between">
-        <label class="check"><input type="checkbox" checked /> Remember Me</label>
+        <span class="muted-small">Your session ends after 5 minutes of inactivity.</span>
         <a href="#" class="link">Forgot Password?</a>
       </div>
       <p id="login-error" class="error"></p>
@@ -76,14 +74,12 @@
   <script src="/js/app.js"></script>
   <script>
     (async () => {
-      // If already signed in (either via Supabase or our local JWT), go to feed
-      if (localStorage.getItem('token')) { location.href = '/feed.html'; return; }
+      // If a valid session exists, go to feed; else stay on landing page.
+      if (Session.isValid()) { location.href = '/feed.html'; return; }
+      Session.clear();
       if (window.sb) {
-        const { data } = await window.sb.auth.getSession();
-        if (data && data.session) {
-          localStorage.setItem('token', data.session.access_token);
-          location.href = '/feed.html'; return;
-        }
+        // Don't auto-sign-in from a stale Supabase session — require an explicit click.
+        try { await window.sb.auth.signOut(); } catch (e) {}
       }
     })();
 
@@ -92,21 +88,34 @@
       const email = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
       const err = document.getElementById('login-error'); err.textContent = '';
-      // 1) Try Supabase
+
+      // 1) Supabase first (real authenticated user)
       if (window.sb) {
         const { data, error } = await window.sb.auth.signInWithPassword({ email, password });
         if (!error && data.session) {
-          localStorage.setItem('token', data.session.access_token);
-          try { const me = await api('/api/me'); setMe(me.user); location.href = '/feed.html'; return; }
-          catch (ex) { err.textContent = 'Backend sync failed: ' + ex.message; return; }
+          Session.setToken(data.session.access_token);
+          try {
+            const me = await api('/api/me');
+            setMe(me.user);
+            location.href = '/feed.html';
+            return;
+          } catch (ex) {
+            err.textContent = 'Backend sync failed: ' + ex.message;
+            Session.clear();
+            return;
+          }
         }
       }
-      // 2) Fallback: legacy email/password (for seeded demo users like aarav@pronet.com)
+
+      // 2) Fallback: real users created via /signup (Supabase unavailable)
       try {
         const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
-        localStorage.setItem('token', data.token); setMe(data.user);
+        Session.setToken(data.token);
+        setMe(data.user);
         location.href = '/feed.html';
-      } catch (ex) { err.textContent = ex.message; }
+      } catch (ex) {
+        err.textContent = 'Invalid email or password.';
+      }
     });
 
     document.getElementById('google-btn').onclick = async () => {
