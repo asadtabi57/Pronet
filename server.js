@@ -354,7 +354,7 @@ app.delete('/api/posts/:id', authRequired, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-const REACTION_TYPES = ['like', 'heart', 'clap', 'appreciate', 'amazed'];
+const REACTION_TYPES = ['like', 'heart', 'celebrate', 'support', 'insightful', 'funny', 'sad'];
 
 async function setReaction(userId, postId, type) {
   const postR = await q(`SELECT id, user_id FROM posts WHERE id = $1`, [postId]);

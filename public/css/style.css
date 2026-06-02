@@ -240,32 +240,65 @@ body.app { background: var(--bg); }
 .search-results .section h3 { font-size: 14px; color: var(--muted); margin: 0 0 8px; padding: 0 4px; }
 
 /* Responsive */
-/* Reactions */
-.like-wrap { position: relative; }
+/* Reactions — LinkedIn-style hover picker */
+.like-wrap { position: relative; display: inline-flex; }
+
+/* Invisible hover-bridge above the like button so the cursor doesn't
+   lose hover when moving up toward the picker. */
+.like-wrap::before {
+  content: ''; position: absolute; left: 0; right: 0;
+  bottom: 100%; height: 14px; pointer-events: none;
+}
+.like-wrap:hover::before { pointer-events: auto; }
+
 .reaction-picker {
-  position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
-  display: none; gap: 4px; padding: 6px 10px; background: #fff;
-  border-radius: 999px; box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 5; white-space: nowrap;
+  position: absolute; bottom: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%) translateY(8px) scale(.85);
+  transform-origin: bottom center;
+  display: flex; gap: 4px; padding: 8px 12px; background: #fff;
+  border-radius: 999px; box-shadow: 0 10px 28px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.06);
+  z-index: 50; white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .18s ease, transform .22s cubic-bezier(.2,.9,.3,1.2), visibility .18s;
 }
-.like-wrap:hover .reaction-picker, .like-wrap.open .reaction-picker { display: flex; }
+.like-wrap.open .reaction-picker {
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
 .reaction-picker button {
-  font-size: 26px; line-height: 1; border: none; background: none; cursor: pointer;
-  padding: 4px 6px; border-radius: 999px; transition: transform .15s;
+  font-size: 30px; line-height: 1; border: none; background: none; cursor: pointer;
+  padding: 4px 4px; border-radius: 999px;
+  transition: transform .18s cubic-bezier(.2,.9,.3,1.4);
   position: relative;
+  opacity: 0; transform: translateY(8px);
+  animation: rxPop .25s ease forwards;
+  animation-delay: calc(40ms * var(--i, 0));
 }
-.reaction-picker button:hover { transform: scale(1.35) translateY(-4px); }
+@keyframes rxPop {
+  to { opacity: 1; transform: translateY(0); }
+}
+.reaction-picker button:hover {
+  transform: scale(1.55) translateY(-8px);
+}
+.reaction-picker button:active { transform: scale(1.35) translateY(-4px); }
 .reaction-picker button::after {
-  content: attr(data-label); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-  background: #0f172a; color: #fff; padding: 2px 8px; border-radius: 4px;
-  font-size: 11px; opacity: 0; pointer-events: none; transition: opacity .15s; margin-bottom: 2px; white-space: nowrap;
+  content: attr(data-label); position: absolute; bottom: calc(100% + 4px); left: 50%;
+  transform: translateX(-50%) scale(.9);
+  background: #0f172a; color: #fff; padding: 3px 9px; border-radius: 6px;
+  font-size: 11px; font-weight: 600; opacity: 0; pointer-events: none;
+  transition: opacity .15s, transform .15s; white-space: nowrap;
 }
-.reaction-picker button:hover::after { opacity: 1; }
-.like-btn .my-rx { font-size: 18px; margin-right: 2px; }
-.like-btn.rx-like { color: var(--linkedin); }
-.like-btn.rx-heart { color: #e11d48; }
-.like-btn.rx-clap { color: #ca8a04; }
-.like-btn.rx-appreciate { color: #7a3eaf; }
-.like-btn.rx-amazed { color: #0e7490; }
+.reaction-picker button:hover::after { opacity: 1; transform: translateX(-50%) scale(1); }
+
+.like-btn .my-rx { font-size: 18px; margin-right: 4px; vertical-align: -2px; }
+.like-btn.rx-like       { color: #0a66c2; font-weight: 600; }
+.like-btn.rx-heart      { color: #df3535; font-weight: 600; }
+.like-btn.rx-celebrate, .like-btn.rx-clap { color: #6dae4f; font-weight: 600; }
+.like-btn.rx-support, .like-btn.rx-appreciate { color: #a872e8; font-weight: 600; }
+.like-btn.rx-insightful, .like-btn.rx-amazed  { color: #e7a33e; font-weight: 600; }
+.like-btn.rx-funny      { color: #1a8d8d; font-weight: 600; }
+.like-btn.rx-sad        { color: #5a7185; font-weight: 600; }
+
 .reaction-summary { display: inline-flex; align-items: center; gap: 2px; }
 .reaction-summary .rx { font-size: 14px; margin-right: -4px; background: #fff; border-radius: 50%; padding: 0 1px; }
 

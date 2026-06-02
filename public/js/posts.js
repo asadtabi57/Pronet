@@ -1,11 +1,18 @@
 // ===== Reactions =====
 const REACTIONS = [
   { id: 'like',       emoji: '👍', label: 'Like',       color: '#0a66c2' },
-  { id: 'heart',      emoji: '❤️', label: 'Heart',      color: '#e11d48' },
-  { id: 'clap',       emoji: '👏', label: 'Clap',       color: '#ca8a04' },
-  { id: 'appreciate', emoji: '💜', label: 'Appreciate', color: '#7a3eaf' },
-  { id: 'amazed',     emoji: '🤩', label: 'Amazed',     color: '#0e7490' },
+  { id: 'heart',      emoji: '❤️', label: 'Love',       color: '#df3535' },
+  { id: 'celebrate',  emoji: '🎉', label: 'Celebrate',  color: '#6dae4f' },
+  { id: 'support',    emoji: '🤗', label: 'Support',    color: '#a872e8' },
+  { id: 'insightful', emoji: '💡', label: 'Insightful', color: '#e7a33e' },
+  { id: 'funny',      emoji: '😄', label: 'Funny',      color: '#1a8d8d' },
+  { id: 'sad',        emoji: '😢', label: 'Sad',        color: '#5a7185' },
+  // Legacy aliases so old data still renders
+  { id: 'clap',       emoji: '🎉', label: 'Celebrate',  color: '#6dae4f' },
+  { id: 'appreciate', emoji: '🤗', label: 'Support',    color: '#a872e8' },
+  { id: 'amazed',     emoji: '💡', label: 'Insightful', color: '#e7a33e' },
 ];
+const PICKER_REACTIONS = REACTIONS.slice(0, 7);
 const reactionById = id => REACTIONS.find(r => r.id === id);
 
 function reactionSummary(counts) {
@@ -23,10 +30,10 @@ function likeBtnHTML(p) {
   const label = r ? r.label : 'Like';
   const emoji = r ? r.emoji : '👍';
   return `<div class="like-wrap">
-    <div class="reaction-picker">
-      ${REACTIONS.map(rx => `<button data-rx="${rx.id}" data-label="${rx.label}" title="${rx.label}">${rx.emoji}</button>`).join('')}
+    <div class="reaction-picker" aria-hidden="true">
+      ${PICKER_REACTIONS.map((rx, i) => `<button data-rx="${rx.id}" data-label="${rx.label}" title="${rx.label}" style="--i:${i}">${rx.emoji}</button>`).join('')}
     </div>
-    <button class="like-btn ${cls}"><span class="my-rx">${emoji}</span> ${label}</button>
+    <button class="like-btn ${cls}" type="button"><span class="my-rx">${emoji}</span> <span class="my-lbl">${label}</span></button>
   </div>`;
 }
 
@@ -113,11 +120,15 @@ function wirePost(el, p, opts = {}) {
   function rewireLike() {
     const newBtn = el.querySelector('.like-btn');
     const newWrap = el.querySelector('.like-wrap');
+
+    // Click the main button: toggle 'like' (LinkedIn behavior)
     newBtn.onclick = (ev) => {
       ev.stopPropagation();
-      // default: toggle 'like'
+      newWrap.classList.remove('open');
       setReaction('like');
     };
+
+    // Click a specific emoji
     newWrap.querySelectorAll('.reaction-picker button').forEach(b => {
       b.onclick = (ev) => {
         ev.stopPropagation(); ev.preventDefault();
@@ -125,11 +136,40 @@ function wirePost(el, p, opts = {}) {
         setReaction(b.dataset.rx);
       };
     });
-    // long-press / right-click to open picker on touch
+
+    // Hover-open with small delay; close after leaving with a grace period
+    let openTimer, closeTimer;
+    const open = () => {
+      clearTimeout(closeTimer);
+      openTimer = setTimeout(() => newWrap.classList.add('open'), 350);
+    };
+    const close = () => {
+      clearTimeout(openTimer);
+      closeTimer = setTimeout(() => newWrap.classList.remove('open'), 220);
+    };
+    newWrap.addEventListener('mouseenter', open);
+    newWrap.addEventListener('mouseleave', close);
+    newBtn.addEventListener('focus', open);
+    newBtn.addEventListener('blur', close);
+
+    // Touch: long-press to open
     let pressTimer;
-    newBtn.addEventListener('touchstart', () => { pressTimer = setTimeout(() => newWrap.classList.add('open'), 350); });
-    newBtn.addEventListener('touchend',   () => clearTimeout(pressTimer));
+    newBtn.addEventListener('touchstart', (e) => {
+      pressTimer = setTimeout(() => {
+        newWrap.classList.add('open');
+        e.preventDefault();
+      }, 380);
+    }, { passive: false });
+    newBtn.addEventListener('touchend', () => clearTimeout(pressTimer));
+    newBtn.addEventListener('touchmove', () => clearTimeout(pressTimer));
+
+    // Right-click anywhere on button also opens picker
     newBtn.addEventListener('contextmenu', e => { e.preventDefault(); newWrap.classList.toggle('open'); });
+
+    // Click outside closes
+    document.addEventListener('click', (e) => {
+      if (!newWrap.contains(e.target)) newWrap.classList.remove('open');
+    }, { once: false });
   }
   rewireLike();
 
