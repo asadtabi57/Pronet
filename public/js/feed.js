@@ -1,10 +1,17 @@
 (async function () {
   if (!requireAuth()) return;
-  await renderNav('home');
 
-  let me;
-  try { me = (await api('/api/me')).user; setMe(me); }
-  catch { return; }
+  // Parallel: nav, me, posts, people — no reason to await sequentially
+  const navP = renderNav('home');
+  const meP = api('/api/me').catch(e => { console.error(e); return null; });
+  const postsP = api('/api/posts').catch(e => { console.error(e); return { posts: [] }; });
+  const peopleP = api('/api/people').catch(e => { console.error(e); return { people: [] }; });
+
+  const meRes = await meP;
+  if (!meRes) return;
+  const me = meRes.user;
+  setMe(me);
+  await navP;
 
   document.getElementById('me-card').innerHTML = `
     <div class="cover" style="background:${me.cover_color || '#a0c4ff'}"></div>
@@ -34,23 +41,25 @@
 
   const postsEl = document.getElementById('posts');
 
-  async function loadPosts() {
-    const { posts } = await api('/api/posts');
+  function renderPosts(posts) {
     if (!posts.length) { postsEl.innerHTML = `<div class="card empty">No posts yet — be the first!</div>`; return; }
     postsEl.innerHTML = posts.map(p => `<article class="card post" id="post-${p.id}" data-id="${p.id}">${renderPostInner(p)}</article>`).join('');
     postsEl.querySelectorAll('.post').forEach(el => {
       const p = posts.find(x => x.id === +el.dataset.id);
       wirePost(el, p, { onChange: loadPosts });
     });
-    // anchor scroll if hash present
     if (location.hash.startsWith('#post-')) {
       const el = document.getElementById(location.hash.slice(1));
       if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
   }
 
-  async function loadPeople() {
-    const { people } = await api('/api/people');
+  async function loadPosts() {
+    const { posts } = await api('/api/posts');
+    renderPosts(posts);
+  }
+
+  function renderPeople(people) {
     const el = document.getElementById('people-list');
     if (!people.length) { el.innerHTML = '<p class="empty">No suggestions.</p>'; return; }
     el.innerHTML = people.slice(0, 6).map(p => `
@@ -69,5 +78,12 @@
     });
   }
 
-  loadPosts(); loadPeople();
+  async function loadPeople() {
+    const { people } = await api('/api/people');
+    renderPeople(people);
+  }
+
+  // Use already-in-flight results from parallel fetch
+  postsP.then(r => renderPosts(r.posts || []));
+  peopleP.then(r => renderPeople(r.people || []));
 })();

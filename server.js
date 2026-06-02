@@ -229,9 +229,27 @@ async function fetchOnePostDTO(id, viewerId) {
 
 // ---------------- App ----------------
 const app = express();
+const compression = require('compression');
+app.use(compression()); // gzip all responses (~70% size reduction on HTML/JSON/JS/CSS)
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  lastModified: true,
+  maxAge: '7d',
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) {
+      // Always revalidate HTML so users get latest navigation/links
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    } else if (/\.(?:css|js|png|jpe?g|gif|webp|svg|ico|woff2?)$/i.test(filePath)) {
+      // Static-y assets: cache aggressively (no file hashing yet, so 7d is safe)
+      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    }
+  },
+}));
+
 app.set('trust proxy', 1); // Railway is behind a proxy; needed for accurate req.ip
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
