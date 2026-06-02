@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Verify Email · Pronet</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="auth-page">
+  <section class="login-card">
+    <h2>Verifying your email…</h2>
+    <p id="status" class="sub">Please wait.</p>
+    <div id="actions" style="display:none;margin-top:16px">
+      <a href="/" class="btn btn-primary btn-block">Go to Sign In</a>
+    </div>
+    <div id="resend-box" style="display:none;margin-top:16px">
+      <p class="sub">Need a new link?</p>
+      <input id="resend-email" type="email" placeholder="your email" autocomplete="email" />
+      <button id="resend-btn" class="btn btn-primary btn-block" type="button">Resend verification</button>
+      <p id="resend-msg" class="sub" style="margin-top:8px"></p>
+    </div>
+  </section>
+  <script>
+    (async () => {
+      const status = document.getElementById('status');
+      const actions = document.getElementById('actions');
+      const resendBox = document.getElementById('resend-box');
+      const params = new URLSearchParams(location.search);
+      const token = params.get('token');
+      if (!token) {
+        status.textContent = 'No token provided.';
+        resendBox.style.display = 'block';
+        return;
+      }
+      try {
+        const r = await fetch('/api/auth/verify-email?token=' + encodeURIComponent(token));
+        const data = await r.json();
+        if (r.ok) {
+          status.style.color = '#057642';
+          status.textContent = data.already
+            ? 'Your email is already verified. You can sign in.'
+            : '✅ Email verified! You can now sign in.';
+          actions.style.display = 'block';
+        } else {
+          status.style.color = '#b24020';
+          status.textContent = data.error || 'Verification failed.';
+          resendBox.style.display = 'block';
+        }
+      } catch (e) {
+        status.textContent = 'Network error. Please try again.';
+        resendBox.style.display = 'block';
+      }
+    })();
+
+    document.getElementById('resend-btn').addEventListener('click', async () => {
+      const email = document.getElementById('resend-email').value.trim();
+      const msg = document.getElementById('resend-msg');
+      msg.style.color = '';
+      msg.textContent = '';
+      if (!email) { msg.textContent = 'Please enter your email.'; return; }
+      try {
+        const r = await fetch('/api/auth/resend-verification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await r.json();
+        if (r.ok) {
+          msg.style.color = '#057642';
+          msg.textContent = 'If the account exists and is unverified, a new link has been sent.';
+          if (data.dev_verify_link) {
+            msg.innerHTML += '<br><a href="' + data.dev_verify_link + '">Dev link</a>';
+          }
+        } else {
+          msg.textContent = data.error || 'Failed to resend.';
+        }
+      } catch (e) { msg.textContent = 'Network error.'; }
+    });
+  </script>
+</body>
+</html>

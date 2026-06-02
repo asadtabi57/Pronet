@@ -55,26 +55,31 @@ async function ensureLocalUserFromSupabase(sbUser) {
   }
   const meta = sbUser.user_metadata || {};
   const displayName = meta.full_name || meta.name || email.split('@')[0];
+  // Supabase verified the email, so mark verified locally too.
+  const sbVerified = Boolean(sbUser.email_confirmed_at || sbUser.confirmed_at);
   if (r.rowCount === 0) {
     const ins = await q(
       `INSERT INTO users (supabase_id, email, password_hash, name, headline, about, location,
-         experience, education, skills, avatar_color, cover_color, avatar_url, created_at)
-       VALUES ($1,$2,'',$3,'','','', '[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$4,$5,$6,$7)
+         experience, education, skills, avatar_color, cover_color, avatar_url, email_verified, created_at)
+       VALUES ($1,$2,'',$3,'','','', '[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$4,$5,$6,$7,$8)
        RETURNING *`,
       [sbUser.id, email, displayName,
        COLORS[Math.floor(Math.random() * COLORS.length)],
        COVERS[Math.floor(Math.random() * COVERS.length)],
        meta.avatar_url || meta.picture || null,
+       sbVerified,
        Date.now()]
     );
     return ins.rows[0];
   }
   const user = r.rows[0];
-  if (!user.supabase_id) {
+  if (!user.supabase_id || (sbVerified && !user.email_verified)) {
     const avatar = user.avatar_url || meta.avatar_url || meta.picture || null;
     const upd = await q(
-      `UPDATE users SET supabase_id = $1, avatar_url = $2 WHERE id = $3 RETURNING *`,
-      [sbUser.id, avatar, user.id]
+      `UPDATE users SET supabase_id = $1, avatar_url = $2,
+         email_verified = email_verified OR $3
+       WHERE id = $4 RETURNING *`,
+      [sbUser.id, avatar, sbVerified, user.id]
     );
     return upd.rows[0];
   }
@@ -227,43 +232,127 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', 1); // Railway is behind a proxy; needed for accurate req.ip
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// ---------------- Rate limiting ----------------
+const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
+const mailer = require('./lib/mailer');
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+});
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many signup attempts from this IP. Please try again later.' },
+});
+const verifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many verification attempts. Please try again later.' },
+});
 
 app.get('/api/config', (req, res) => {
   res.json({ supabase_url: SUPABASE_URL || null, supabase_key: SUPABASE_KEY || null });
 });
 
+function appBaseUrl(req) {
+  return process.env.APP_URL
+      || `${req.protocol}://${req.get('host')}`;
+}
+
 // --- Auth ---
-app.post('/api/auth/signup', wrap(async (req, res) => {
+app.post('/api/auth/signup', signupLimiter, wrap(async (req, res) => {
   const { name, email, password, headline } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const em = String(email).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return res.status(400).json({ error: 'Invalid email address' });
   const existing = await findUserByEmail(em);
   if (existing) return res.status(409).json({ error: 'Email already registered' });
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = Date.now() + 24 * 60 * 60 * 1000; // 24h
   const ins = await q(
     `INSERT INTO users (email, password_hash, name, headline, about, location,
-       experience, education, skills, avatar_color, cover_color, created_at)
-     VALUES ($1,$2,$3,$4,'','','[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$5,$6,$7)
+       experience, education, skills, avatar_color, cover_color,
+       email_verified, email_verify_token, email_verify_expires, created_at)
+     VALUES ($1,$2,$3,$4,'','','[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$5,$6,FALSE,$7,$8,$9)
      RETURNING *`,
     [em, bcrypt.hashSync(password, 10), name, headline || '',
      COLORS[Math.floor(Math.random() * COLORS.length)],
      COVERS[Math.floor(Math.random() * COVERS.length)],
-     Date.now()]
+     token, expires, Date.now()]
   );
   const user = ins.rows[0];
-  res.json({ token: signToken(user), user: await publicUser(user, user.id) });
+  const link = `${appBaseUrl(req)}/verify-email.html?token=${token}`;
+  const tpl = mailer.verifyEmailTemplate({ name: user.name, link });
+  const mailResult = await mailer.sendMail({ to: em, subject: tpl.subject, html: tpl.html, text: tpl.text });
+  const payload = {
+    user: await publicUser(user, user.id),
+    message: 'Account created. Please check your email to verify your address before logging in.',
+  };
+  // Dev-mode fallback: surface the link so testers aren't blocked when no mailer is configured
+  if (!mailer.configured()) payload.dev_verify_link = link;
+  res.json(payload);
 }));
 
-app.post('/api/auth/login', wrap(async (req, res) => {
+app.post('/api/auth/login', loginLimiter, wrap(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
   const user = await findUserByEmail(email);
   if (!user || !user.password_hash || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  if (!user.email_verified) {
+    return res.status(403).json({ error: 'Please verify your email before signing in.', needs_verification: true });
+  }
   res.json({ token: signToken(user), user: await publicUser(user, user.id) });
+}));
+
+app.get('/api/auth/verify-email', verifyLimiter, wrap(async (req, res) => {
+  const token = String(req.query.token || '');
+  if (!token) return res.status(400).json({ error: 'Token required' });
+  const r = await q(`SELECT * FROM users WHERE email_verify_token = $1 LIMIT 1`, [token]);
+  if (r.rowCount === 0) return res.status(400).json({ error: 'Invalid or already-used verification link' });
+  const user = r.rows[0];
+  if (user.email_verified) return res.json({ ok: true, already: true });
+  if (user.email_verify_expires && Number(user.email_verify_expires) < Date.now()) {
+    return res.status(400).json({ error: 'Verification link expired. Please request a new one.', expired: true });
+  }
+  await q(
+    `UPDATE users SET email_verified = TRUE, email_verify_token = NULL, email_verify_expires = NULL WHERE id = $1`,
+    [user.id]
+  );
+  res.json({ ok: true });
+}));
+
+app.post('/api/auth/resend-verification', verifyLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase();
+  if (!em) return res.status(400).json({ error: 'Email required' });
+  const user = await findUserByEmail(em);
+  // Don't leak existence: always 200
+  if (!user || user.email_verified || !user.password_hash) return res.json({ ok: true });
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = Date.now() + 24 * 60 * 60 * 1000;
+  await q(`UPDATE users SET email_verify_token = $1, email_verify_expires = $2 WHERE id = $3`,
+          [token, expires, user.id]);
+  const link = `${appBaseUrl(req)}/verify-email.html?token=${token}`;
+  const tpl = mailer.verifyEmailTemplate({ name: user.name, link });
+  await mailer.sendMail({ to: em, subject: tpl.subject, html: tpl.html, text: tpl.text });
+  const out = { ok: true };
+  if (!mailer.configured()) out.dev_verify_link = link;
+  res.json(out);
 }));
 
 app.get('/api/me', authRequired, wrap(async (req, res) => {

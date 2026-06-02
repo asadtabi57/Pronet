@@ -30,8 +30,21 @@
       const headline = document.getElementById('headline').value.trim();
       const email = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
-      const err = document.getElementById('signup-error'); err.textContent = '';
-      if (!window.sb) { err.textContent = 'Supabase is not configured.'; return; }
+      const err = document.getElementById('signup-error');
+      err.style.color = ''; err.textContent = '';
+
+      async function backendSignup() {
+        const data = await api('/api/auth/signup', { method: 'POST', body: { name, email, password, headline } });
+        err.style.color = '#057642';
+        let msg = data.message || 'Account created. Check your email to verify.';
+        if (data.dev_verify_link) msg += ' (dev link: ' + data.dev_verify_link + ')';
+        err.textContent = msg;
+      }
+
+      if (!window.sb) {
+        try { await backendSignup(); } catch (ex) { err.textContent = ex.message; }
+        return;
+      }
       try {
         const { data, error } = await window.sb.auth.signUp({
           email, password,
@@ -43,7 +56,6 @@
         if (error) throw error;
         if (data.session) {
           Session.setToken(data.session.access_token);
-          // Sync profile (creates local user, pushes headline)
           try {
             const me = await api('/api/me');
             if (headline && !me.user.headline) {
@@ -55,7 +67,11 @@
           err.style.color = '#057642';
           err.textContent = 'Account created! Check your email to confirm, then sign in.';
         }
-      } catch (ex) { err.textContent = ex.message; }
+      } catch (ex) {
+        // Fallback to backend signup so verification still works if Supabase is misconfigured
+        try { await backendSignup(); }
+        catch (ex2) { err.textContent = ex.message || ex2.message; }
+      }
     });
   </script>
 </body>

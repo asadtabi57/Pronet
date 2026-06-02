@@ -114,7 +114,15 @@
         setMe(data.user);
         location.href = '/feed.html';
       } catch (ex) {
-        err.textContent = 'Invalid email or password.';
+        // Surface specific server errors (verification required, rate limit, etc.)
+        const msg = (ex && ex.message) ? ex.message : '';
+        if (/verify your email/i.test(msg)) {
+          err.innerHTML = msg + ' <a href="/verify-email.html" class="link">Resend link</a>';
+        } else if (/too many/i.test(msg)) {
+          err.textContent = msg;
+        } else {
+          err.textContent = 'Invalid email or password.';
+        }
       }
     });
 
