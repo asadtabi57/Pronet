@@ -390,10 +390,42 @@ function installSearchTypeahead() {
   input.addEventListener('focus', () => {
     const q = input.value.trim();
     if (q && cache.has(q)) { renderResults(q, cache.get(q)); }
+    if (window.innerWidth <= 600) {
+      document.body.classList.add('search-open');
+      // Insert a Cancel button if not already there
+      if (!document.getElementById('search-cancel')) {
+        const cancel = document.createElement('button');
+        cancel.id = 'search-cancel';
+        cancel.type = 'button';
+        cancel.textContent = 'Cancel';
+        cancel.className = 'search-cancel';
+        cancel.onclick = () => {
+          input.value = ''; close();
+          document.body.classList.remove('search-open');
+          cancel.remove(); input.blur();
+        };
+        wrap.appendChild(cancel);
+      }
+    }
+  });
+
+  function exitMobileSearch() {
+    document.body.classList.remove('search-open');
+    const c = document.getElementById('search-cancel');
+    if (c) c.remove();
+  }
+
+  input.addEventListener('blur', () => {
+    // Delay so taps on results register first; if dropdown is gone, exit overlay
+    setTimeout(() => {
+      if (dd.hidden && !document.activeElement?.classList?.contains('sd-row')) {
+        exitMobileSearch();
+      }
+    }, 200);
   });
 
   document.addEventListener('mousedown', (e) => {
-    if (!wrap.contains(e.target)) close();
+    if (!wrap.contains(e.target)) { close(); exitMobileSearch(); }
   });
 }
 
@@ -435,3 +467,42 @@ function toast(msg) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2200);
 }
+
+// ===== Global profile picture viewer (WhatsApp/Instagram-style) =====
+function openImageViewer(src) {
+  if (!src) return;
+  const back = document.createElement('div');
+  back.className = 'img-viewer';
+  back.innerHTML = `
+    <button class="img-viewer-close" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <img src="${src}" alt="" />`;
+  document.body.appendChild(back);
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => back.classList.add('open'));
+
+  function close() {
+    back.classList.remove('open');
+    document.body.style.overflow = '';
+    setTimeout(() => back.remove(), 220);
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  back.addEventListener('click', (e) => {
+    if (e.target === back || e.target.closest('.img-viewer-close')) close();
+  });
+  document.addEventListener('keydown', onKey);
+}
+
+// Delegate: clicking any avatar image opens the viewer (skip with data-no-viewer)
+document.addEventListener('click', (e) => {
+  const wrap = e.target.closest('.avatar.img');
+  if (!wrap) return;
+  if (wrap.dataset.noViewer === 'true' || wrap.closest('[data-no-viewer="true"]')) return;
+  const img = wrap.querySelector('img');
+  if (!img || !img.src) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openImageViewer(img.src);
+}, true); // capture phase: beats <a> navigation
