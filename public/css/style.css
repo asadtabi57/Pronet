@@ -334,11 +334,14 @@ body.app {
   max-width: var(--container); margin: 0 auto;
   display: flex; align-items: center; gap: 12px;
   padding: 8px 24px; height: 56px;
+  width: 100%; min-width: 0; box-sizing: border-box;
 }
 .app-nav .brand {
   width: 36px; height: 36px; border-radius: 10px;
   background: var(--brand); color: #fff;
   font-size: 14px; font-weight: 800; letter-spacing: -0.02em;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
 }
 .app-nav .spacer { flex: 1; }
 
@@ -1181,23 +1184,27 @@ body.app {
   .login-card { margin: -40px 16px 0; padding: 24px; }
   .contact-grid { grid-template-columns: 1fr; gap: 18px; text-align: center; }
   .stay h2 { font-size: 36px; }
-  .app-nav-inner { gap: 4px; padding: 6px 10px; height: 52px; }
+  .app-nav-inner { gap: 4px; padding: 6px 8px; height: 52px; }
   .app-nav .brand { width: 32px; height: 32px; font-size: 13px; }
-  .nav-tabs { gap: 0; }
-  .nav-tab { padding: 6px 6px 4px; min-width: 36px; }
+  .app-nav .spacer { display: none; }            /* free up space on phones */
+  .nav-tabs { gap: 0; flex-shrink: 0; }
+  .nav-tab { padding: 6px 5px 4px; min-width: 32px; }
   .nav-tab .icon { font-size: 18px; }
-  .nav-tab .badge { top: 0; right: 0; min-width: 16px; height: 16px; font-size: 9px; }
-  .search input { height: 36px; font-size: var(--fs-13); padding: 8px 10px 8px 34px; }
-  .search::before { left: 10px; width: 16px; height: 16px; }
-  .layout { padding: 0 12px; }
+  .nav-tab .badge { top: 0; right: -2px; min-width: 14px; height: 14px; font-size: 8px; padding: 0 3px; }
+  .search { flex: 1 1 60px; min-width: 60px; }
+  .search input { width: 100%; height: 36px; font-size: var(--fs-13); padding: 8px 10px 8px 32px; }
+  .search::before { left: 9px; width: 14px; height: 14px; }
+  .layout { padding: 0 12px; margin: 12px auto; }
   .card { border-radius: var(--r-md); }
   .composer { padding: 12px; gap: 8px; }
   .composer textarea { padding: 10px 14px; font-size: 14px; min-height: 42px; }
-  .post-body, .post-head, .post-actions, .post-stats { padding-left: 14px; padding-right: 14px; }
+  .composer textarea::placeholder { font-size: 13px; }
+  .post { padding: 12px 14px 4px; }
   .post-media { margin-left: -14px; margin-right: -14px; }
   .person-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .post-actions .label { display: none; }
   .modal-content { margin: 16px; padding: 20px; }
+  .section-title { font-size: var(--fs-16); padding: 0 4px; }
 }
 
 /* Back button (visible only on mobile via media query above) */
