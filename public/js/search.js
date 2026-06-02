@@ -25,7 +25,13 @@
     </div>`;
 
   if (people.length) {
-    document.getElementById('ppl-list').innerHTML = people.map(p => `
+    document.getElementById('ppl-list').innerHTML = people.map(p => {
+      let btn;
+      if (p.connected)        btn = '<button class="btn-tiny" disabled>✓ Connected</button>';
+      else if (p.pending_out) btn = '<button class="btn-tiny" disabled>Pending</button>';
+      else if (p.pending_in)  btn = '<button class="btn-fill accept-btn">Accept</button>';
+      else                    btn = '<button class="btn-fill connect-btn">+ Connect</button>';
+      return `
       <div class="person" data-id="${p.id}">
         ${avatar(p, 'md')}
         <div class="info">
@@ -33,15 +39,24 @@
           <div class="headline">${escapeHTML(p.headline || '')}</div>
           <div class="headline">${escapeHTML(p.location || '')}</div>
         </div>
-        ${p.connected ? '<button class="btn-tiny" disabled>✓ Connected</button>'
-                      : '<button class="btn-fill connect-btn">+ Connect</button>'}
+        ${btn}
         <a class="btn-tiny" href="/profile.html?id=${p.id}">View</a>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     document.querySelectorAll('#ppl-list .connect-btn').forEach(btn => {
       btn.onclick = async () => {
         const id = btn.closest('.person').dataset.id;
         await api(`/api/people/${id}/connect`, { method: 'POST' });
+        btn.outerHTML = '<button class="btn-tiny" disabled>Pending</button>';
+        toast('Request sent');
+      };
+    });
+    document.querySelectorAll('#ppl-list .accept-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.closest('.person').dataset.id;
+        await api(`/api/connections/${id}/accept`, { method: 'POST' });
         btn.outerHTML = '<button class="btn-tiny" disabled>✓ Connected</button>';
+        toast('Connected!');
       };
     });
   }

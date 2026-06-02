@@ -10,9 +10,15 @@
   catch (e) { root.innerHTML = `<div class="card empty">${escapeHTML(e.message)}</div>`; return; }
 
   const isMe = data.id === me.id;
+  function profileBtnLabel(d) {
+    if (d.connected)   return '✓ Connected';
+    if (d.pending_out) return 'Pending';
+    if (d.pending_in)  return 'Accept request';
+    return '+ Connect';
+  }
   const actions = isMe
     ? `<button class="btn-tiny" id="edit-btn">✎ Edit profile</button>`
-    : `<button class="btn-fill" id="connect-btn">${data.connected ? '✓ Connected' : '+ Connect'}</button>
+    : `<button class="btn-fill" id="connect-btn">${profileBtnLabel(data)}</button>
        <button class="btn-tiny" id="message-btn">💬 Message</button>`;
 
   root.innerHTML = `
@@ -81,16 +87,25 @@
 
   if (!isMe) {
     document.getElementById('connect-btn').onclick = async (ev) => {
-      const connected = data.connected;
-      if (connected) {
+      if (data.connected) {
         if (!confirm('Remove connection?')) return;
         await api(`/api/people/${data.id}/disconnect`, { method: 'POST' });
-        data.connected = false; ev.target.textContent = '+ Connect';
+        data.connected = false; data.pending_out = false; data.pending_in = false;
+      } else if (data.pending_in) {
+        await api(`/api/connections/${data.id}/accept`, { method: 'POST' });
+        data.connected = true; data.pending_in = false;
+        toast('Connected!');
+      } else if (data.pending_out) {
+        return; // already pending — no-op
       } else {
         await api(`/api/people/${data.id}/connect`, { method: 'POST' });
-        data.connected = true; ev.target.textContent = '✓ Connected';
+        data.pending_out = true;
+        toast('Request sent');
       }
+      ev.target.textContent = profileBtnLabel(data);
+      if (data.pending_out) ev.target.disabled = true;
     };
+    if (data.pending_out) document.getElementById('connect-btn').disabled = true;
     document.getElementById('message-btn').onclick = () => location.href = `/messages.html?user=${data.id}`;
   } else {
     document.getElementById('edit-btn').onclick = () => openEditModal(data);

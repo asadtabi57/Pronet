@@ -59,6 +59,12 @@
     renderPosts(posts);
   }
 
+  function connectBtnHtml(p) {
+    if (p.connected)    return `<button class="btn-tiny" disabled>✓ Connected</button>`;
+    if (p.pending_out)  return `<button class="btn-tiny" disabled>Pending</button>`;
+    if (p.pending_in)   return `<button class="btn-fill accept-btn">Accept</button>`;
+    return `<button class="btn-tiny connect-btn">+ Connect</button>`;
+  }
   function renderPeople(people) {
     const el = document.getElementById('people-list');
     if (!people.length) { el.innerHTML = '<p class="empty">No suggestions.</p>'; return; }
@@ -69,12 +75,19 @@
           <div class="name"><a href="/profile.html?id=${p.id}">${escapeHTML(p.name)}</a></div>
           <div class="headline">${escapeHTML(p.headline || '')}</div>
         </div>
-        <button class="btn-tiny" ${p.connected ? 'disabled' : ''}>${p.connected ? '✓ Connected' : '+ Connect'}</button>
+        ${connectBtnHtml(p)}
       </div>`).join('');
     el.querySelectorAll('.person').forEach(node => {
-      const btn = node.querySelector('button');
-      if (btn.disabled) return;
-      btn.onclick = async () => { await api(`/api/people/${node.dataset.id}/connect`, { method: 'POST' }); loadPeople(); };
+      const cBtn = node.querySelector('.connect-btn');
+      if (cBtn) cBtn.onclick = async () => {
+        await api(`/api/people/${node.dataset.id}/connect`, { method: 'POST' });
+        toast('Request sent'); loadPeople();
+      };
+      const aBtn = node.querySelector('.accept-btn');
+      if (aBtn) aBtn.onclick = async () => {
+        await api(`/api/connections/${node.dataset.id}/accept`, { method: 'POST' });
+        toast('Connected!'); loadPeople();
+      };
     });
   }
 

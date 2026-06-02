@@ -205,6 +205,30 @@ async function renderNav(activeTab) {
     </div>`;
 
   installSearchTypeahead();
+
+  // Live-refresh badges every 30s so incoming requests/messages show up without page reload
+  if (!window.__navPollStarted) {
+    window.__navPollStarted = true;
+    setInterval(async () => {
+      try {
+        const [n, t] = await Promise.all([api('/api/notifications'), api('/api/messages/threads')]);
+        const newNotif = n.unread || 0;
+        const newMsgs  = (t.threads || []).reduce((sum, x) => sum + (x.unread || 0), 0);
+        const setBadge = (id, count) => {
+          const link = document.querySelector(`.nav-tab[href*="${id}"]`);
+          if (!link) return;
+          let badge = link.querySelector('.badge');
+          if (count > 0) {
+            const text = count > 99 ? '99+' : String(count);
+            if (badge) badge.textContent = text;
+            else link.insertAdjacentHTML('beforeend', `<span class="badge">${text}</span>`);
+          } else if (badge) badge.remove();
+        };
+        setBadge('notifications.html', newNotif);
+        setBadge('messages.html', newMsgs);
+      } catch (e) {}
+    }, 30000);
+  }
 }
 
 // ===== Live search typeahead =====
