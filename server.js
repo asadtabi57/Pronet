@@ -637,20 +637,41 @@ app.post('/api/notifications/read', authRequired, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// --- Avatar upload (base64 data URL → file) ---
+// --- Avatar upload (base64 data URL → Supabase Storage) ---
+const storage = require('./lib/supabase-storage');
+
 app.post('/api/me/avatar', authRequired, wrap(async (req, res) => {
   const { data_url } = req.body || {};
   if (!data_url || typeof data_url !== 'string') return res.status(400).json({ error: 'data_url required' });
   const m = data_url.match(/^data:(image\/(png|jpe?g|gif|webp));base64,(.+)$/i);
   if (!m) return res.status(400).json({ error: 'Invalid image (must be png/jpg/gif/webp data URL)' });
+  const mime = m[1].toLowerCase();
   const ext = m[2].toLowerCase() === 'jpeg' ? 'jpg' : m[2].toLowerCase();
   const buf = Buffer.from(m[3], 'base64');
   if (buf.length > 4 * 1024 * 1024) return res.status(413).json({ error: 'Image too large (max 4 MB)' });
-  const uploads = path.join(__dirname, 'public', 'uploads');
-  if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
   const filename = `avatar_${req.user.id}_${Date.now()}.${ext}`;
-  fs.writeFileSync(path.join(uploads, filename), buf);
-  const url = `/uploads/${filename}`;
+
+  let url;
+  try {
+    if (storage.enabled()) {
+      // Best-effort delete of previous Supabase avatar
+      const prev = await findUser(req.user.id);
+      if (prev && prev.avatar_url && storage.isSupabaseUrl(prev.avatar_url)) {
+        storage.deleteAvatar(prev.avatar_url).catch(() => {});
+      }
+      url = await storage.uploadAvatar(filename, buf, mime);
+    } else {
+      // Local fallback (dev only) — Railway filesystem is ephemeral
+      const uploads = path.join(__dirname, 'public', 'uploads');
+      if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
+      fs.writeFileSync(path.join(uploads, filename), buf);
+      url = `/uploads/${filename}`;
+    }
+  } catch (e) {
+    console.error('Avatar upload failed:', e.message);
+    return res.status(502).json({ error: 'Upload failed: ' + e.message });
+  }
+
   await q(`UPDATE users SET avatar_url = $1 WHERE id = $2`, [url, req.user.id]);
   const u = await findUser(req.user.id);
   res.json({ user: await publicUser(u, u.id) });
@@ -659,7 +680,11 @@ app.post('/api/me/avatar', authRequired, wrap(async (req, res) => {
 app.delete('/api/me/avatar', authRequired, wrap(async (req, res) => {
   const u = await findUser(req.user.id);
   if (u && u.avatar_url) {
-    try { fs.unlinkSync(path.join(__dirname, 'public', u.avatar_url.replace(/^\//, ''))); } catch (e) {}
+    if (storage.isSupabaseUrl(u.avatar_url)) {
+      storage.deleteAvatar(u.avatar_url).catch(() => {});
+    } else if (u.avatar_url.startsWith('/uploads/')) {
+      try { fs.unlinkSync(path.join(__dirname, 'public', u.avatar_url.replace(/^\//, ''))); } catch (e) {}
+    }
     await q(`UPDATE users SET avatar_url = NULL WHERE id = $1`, [req.user.id]);
   }
   const fresh = await findUser(req.user.id);
