@@ -307,22 +307,39 @@ app.get('/api/search', authRequired, wrap(async (req, res) => {
   const qstr = String(req.query.q || '').trim();
   if (!qstr) return res.json({ people: [], posts: [] });
   const like = '%' + qstr.toLowerCase() + '%';
+  // People (with connection_count + connected flag computed in-query so we
+  // don't issue 25 extra round-trips per keystroke).
   const peopleR = await q(
-    `SELECT * FROM users
-      WHERE id <> $1 AND (
-        LOWER(name) LIKE $2 OR LOWER(COALESCE(headline,'')) LIKE $2
-        OR LOWER(COALESCE(location,'')) LIKE $2
-        OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(skills) AS s WHERE LOWER(s) LIKE $2)
+    `SELECT u.id, u.name, u.email, u.headline, u.about, u.location,
+            u.avatar_color, u.avatar_url, u.cover_color, u.skills,
+            (SELECT COUNT(*)::int FROM connections c
+              WHERE c.user_a = u.id OR c.user_b = u.id) AS connection_count,
+            EXISTS (SELECT 1 FROM connections c
+              WHERE (c.user_a = $1 AND c.user_b = u.id)
+                 OR (c.user_b = $1 AND c.user_a = u.id)) AS connected
+       FROM users u
+      WHERE u.id <> $1 AND (
+        LOWER(u.name) LIKE $2 OR LOWER(COALESCE(u.headline,'')) LIKE $2
+        OR LOWER(COALESCE(u.location,'')) LIKE $2
+        OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(u.skills) AS s WHERE LOWER(s) LIKE $2)
       )
-      LIMIT 25`,
+      ORDER BY
+        (LOWER(u.name) LIKE $2) DESC,
+        u.name ASC
+      LIMIT 10`,
     [req.user.id, like]
   );
-  const people = [];
-  for (const u of peopleR.rows) people.push(await publicUser(u, req.user.id));
+  const people = peopleR.rows.map(u => ({
+    id: Number(u.id), name: u.name, email: u.email,
+    headline: u.headline || '', about: u.about || '', location: u.location || '',
+    avatar_color: u.avatar_color, avatar_url: u.avatar_url || null,
+    cover_color: u.cover_color || '#a0c4ff', skills: u.skills || [],
+    connection_count: u.connection_count, connected: u.connected,
+  }));
   const posts = await fetchPostDTOs({
     viewerId: req.user.id,
     where: 'LOWER(p.content) LIKE $2',
-    params: [like], limit: 20
+    params: [like], limit: 10
   });
   res.json({ people, posts });
 }));

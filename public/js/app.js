@@ -185,8 +185,9 @@ async function renderNav(activeTab) {
   navEl.innerHTML = `
     <div class="app-nav-inner">
       <a class="brand" href="/feed.html">in</a>
-      <div class="search">
-        <input id="global-search" placeholder="Search people, posts…" autocomplete="off" />
+      <div class="search" id="search-wrap">
+        <input id="global-search" placeholder="Search people, posts…" autocomplete="off" spellcheck="false" />
+        <div id="search-dropdown" class="search-dropdown" hidden></div>
       </div>
       <div class="spacer"></div>
       <div class="nav-tabs">
@@ -203,13 +204,158 @@ async function renderNav(activeTab) {
       </div>
     </div>`;
 
-  const search = document.getElementById('global-search');
-  search.addEventListener('keydown', (e) => {
+  installSearchTypeahead();
+}
+
+// ===== Live search typeahead =====
+function installSearchTypeahead() {
+  const input = document.getElementById('global-search');
+  const dd = document.getElementById('search-dropdown');
+  const wrap = document.getElementById('search-wrap');
+  if (!input || !dd) return;
+
+  let timer = null;
+  let lastReqId = 0;
+  let cache = new Map(); // q -> { people, posts }
+  let activeIdx = -1;
+  let items = []; // flat list of selectable {type,id,label,href}
+
+  function close() { dd.hidden = true; activeIdx = -1; }
+  function show() { dd.hidden = false; }
+
+  function renderResults(q, data) {
+    const people = (data.people || []).slice(0, 5);
+    const posts = (data.posts || []).slice(0, 4);
+    items = [];
+
+    if (!people.length && !posts.length) {
+      dd.innerHTML = `<div class="sd-empty">No results for "<b>${escapeHTML(q)}</b>"</div>`;
+      show(); return;
+    }
+
+    let html = '';
+    if (people.length) {
+      html += `<div class="sd-section-title">People</div>`;
+      people.forEach(u => {
+        items.push({ type: 'person', id: u.id, href: `/profile.html?id=${u.id}` });
+        const av = u.avatar_url
+          ? `<span class="sd-avatar"><img src="${escapeHTML(u.avatar_url)}" alt=""/></span>`
+          : `<span class="sd-avatar" style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}</span>`;
+        html += `
+          <a class="sd-row sd-person" data-idx="${items.length-1}" href="/profile.html?id=${u.id}">
+            ${av}
+            <div class="sd-meta">
+              <div class="sd-name">${highlight(u.name, q)}</div>
+              <div class="sd-sub">${highlight(u.headline || u.location || '', q)}</div>
+            </div>
+          </a>`;
+      });
+    }
+    if (posts.length) {
+      html += `<div class="sd-section-title">Posts</div>`;
+      posts.forEach(p => {
+        items.push({ type: 'post', id: p.id, href: `/search.html?q=${encodeURIComponent(q)}#post-${p.id}` });
+        const snippet = (p.content || '').slice(0, 110);
+        html += `
+          <a class="sd-row sd-post" data-idx="${items.length-1}" href="/search.html?q=${encodeURIComponent(q)}">
+            <span class="sd-avatar sd-post-icon">📝</span>
+            <div class="sd-meta">
+              <div class="sd-name">${escapeHTML(p.name)}</div>
+              <div class="sd-sub">${highlight(snippet + (p.content && p.content.length > 110 ? '…' : ''), q)}</div>
+            </div>
+          </a>`;
+      });
+    }
+    html += `<a class="sd-row sd-all" href="/search.html?q=${encodeURIComponent(q)}">
+      <span class="sd-avatar sd-post-icon">🔍</span>
+      <div class="sd-meta"><div class="sd-name">See all results for "${escapeHTML(q)}"</div></div>
+    </a>`;
+    items.push({ type: 'all', href: `/search.html?q=${encodeURIComponent(q)}` });
+
+    dd.innerHTML = html;
+    show();
+    setActive(-1);
+
+    dd.querySelectorAll('.sd-row').forEach(a => {
+      a.addEventListener('mousedown', (e) => {
+        // mousedown fires before blur, so navigation isn't cancelled
+        e.preventDefault();
+        location.href = a.getAttribute('href');
+      });
+    });
+  }
+
+  function setActive(i) {
+    activeIdx = i;
+    dd.querySelectorAll('.sd-row').forEach((el, idx) => {
+      el.classList.toggle('active', idx === i);
+    });
+  }
+
+  async function doSearch(q) {
+    if (cache.has(q)) { renderResults(q, cache.get(q)); return; }
+    const myId = ++lastReqId;
+    try {
+      const data = await api('/api/search?q=' + encodeURIComponent(q));
+      if (myId !== lastReqId) return; // stale
+      cache.set(q, data);
+      if (cache.size > 30) cache.delete(cache.keys().next().value);
+      renderResults(q, data);
+    } catch (e) {
+      if (myId !== lastReqId) return;
+      dd.innerHTML = `<div class="sd-empty">Search failed: ${escapeHTML(e.message)}</div>`;
+      show();
+    }
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (!q) { close(); return; }
+    if (q.length < 1) { close(); return; }
+    dd.innerHTML = `<div class="sd-loading">Searching…</div>`;
+    show();
+    timer = setTimeout(() => doSearch(q), 150);
+  });
+
+  input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      const q = search.value.trim();
-      if (q) location.href = '/search.html?q=' + encodeURIComponent(q);
+      const q = input.value.trim();
+      if (activeIdx >= 0 && items[activeIdx]) {
+        e.preventDefault(); location.href = items[activeIdx].href;
+      } else if (q) {
+        location.href = '/search.html?q=' + encodeURIComponent(q);
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (dd.hidden) return;
+      setActive(Math.min(items.length - 1, activeIdx + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive(Math.max(-1, activeIdx - 1));
+    } else if (e.key === 'Escape') {
+      close(); input.blur();
     }
   });
+
+  input.addEventListener('focus', () => {
+    const q = input.value.trim();
+    if (q && cache.has(q)) { renderResults(q, cache.get(q)); }
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!wrap.contains(e.target)) close();
+  });
+}
+
+function highlight(text, q) {
+  const t = String(text == null ? '' : text);
+  if (!q) return escapeHTML(t);
+  const idx = t.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return escapeHTML(t);
+  return escapeHTML(t.slice(0, idx))
+       + '<mark>' + escapeHTML(t.slice(idx, idx + q.length)) + '</mark>'
+       + escapeHTML(t.slice(idx + q.length));
 }
 
 // ===== Modal =====
