@@ -28,3 +28,4 @@ Render dashboard (it's marked `sync: false` so it isn't pulled from this repo).
 ## Seed credentials (after running `migrate-data.js`)
 - Email: any seeded user (e.g. `aarav@pronet.com`)
 - Password: `password123`
+
