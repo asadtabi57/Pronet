@@ -891,7 +891,11 @@ body.app {
 .comment-actions { margin-top: 4px; font-size: var(--fs-12); }
 .comment-edit { margin-top: 6px; }
 .m-edit-box { margin-top: 6px; }
-.m-edit-actions { margin-top: 4px; font-size: var(--fs-12); }
+.m-edit-actions { margin-top: 6px; font-size: var(--fs-12); }
+/* The edit box lives inside the blue "from-me" bubble, so its Save/Cancel
+   links must be white to stay legible against the blue background. */
+.msg-bubble.from-me .m-edit-actions a { color: #fff; }
+.msg-bubble.from-me .m-edit-actions a:hover { color: #fff; text-decoration: underline; }
 .comment-edit .c-edit-input, .m-edit-input {
   width: 100%; box-sizing: border-box;
   border: 1px solid var(--line); border-radius: 8px;
