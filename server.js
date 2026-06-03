@@ -804,6 +804,8 @@ app.post('/api/auth/forgot-password/verify', forgotLimiter, wrap(async (req, res
   const em = String((req.body && req.body.email) || '').toLowerCase().trim();
   const otp = String((req.body && req.body.otp) || '').trim();
   if (!em || !otp) return res.status(400).json({ error: 'Email and code are required.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (!/^\d{6}$/.test(otp)) return res.status(400).json({ error: 'Enter the 6-digit code.' });
   const v = await validateResetOtp(em, otp);
   if (!v.ok) return res.status(400).json({ error: v.error });
   res.json({ ok: true });
@@ -815,7 +817,11 @@ app.post('/api/auth/forgot-password/reset', forgotLimiter, wrap(async (req, res)
   const otp = String((req.body && req.body.otp) || '').trim();
   const newPassword = String((req.body && req.body.password) || '');
   if (!em || !otp || !newPassword) return res.status(400).json({ error: 'Email, code and new password are required.' });
-  if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (!/^\d{6}$/.test(otp)) return res.status(400).json({ error: 'Enter the 6-digit code.' });
+  // Enforce the same strong password policy as signup (min 8, upper/lower/number/special).
+  const pwErr = validatePassword(newPassword);
+  if (pwErr) return res.status(400).json({ error: pwErr });
   const v = await validateResetOtp(em, otp);
   if (!v.ok) return res.status(400).json({ error: v.error });
   const user = await findUserByEmail(em);

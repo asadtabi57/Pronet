@@ -120,7 +120,8 @@
         <p class="fp-sub">Choose a strong password you haven't used before.</p>
         <div class="fp-field">
           <label for="fp-pass">New password</label>
-          <input id="fp-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password" />
+          <input id="fp-pass" type="password" placeholder="Min 8 chars, mixed case, number &amp; symbol" autocomplete="new-password" />
+          <p class="center-muted" style="font-size:12px;text-align:left;margin:4px 0 0">Use 8+ characters with uppercase, lowercase, a number and a special character.</p>
         </div>
         <div class="fp-field">
           <label for="fp-pass2">Confirm password</label>
@@ -331,7 +332,9 @@
       document.getElementById('fp-reset-btn').addEventListener('click', async () => {
         const p1 = document.getElementById('fp-pass').value;
         const p2 = document.getElementById('fp-pass2').value;
-        if (p1.length < 6) { msg('fp-msg-pass', 'Password must be at least 6 characters.'); return; }
+        // Mirror the backend strong-password policy for instant feedback.
+        const strong = p1.length >= 8 && /[a-z]/.test(p1) && /[A-Z]/.test(p1) && /\d/.test(p1) && /[^A-Za-z0-9]/.test(p1);
+        if (!strong) { msg('fp-msg-pass', 'Use 8+ characters with uppercase, lowercase, a number and a special character.'); return; }
         if (p1 !== p2) { msg('fp-msg-pass', 'Passwords do not match.'); return; }
         const btn = document.getElementById('fp-reset-btn');
         busy(btn, true, 'Updating…');
