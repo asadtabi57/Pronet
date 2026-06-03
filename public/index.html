@@ -57,6 +57,21 @@
       </button>
       <p class="center-muted">Don't have an account? <a class="link" href="/signup.html">Create one now!</a></p>
     </form>
+
+    <!-- Inline email-verification (OTP) step, shown when an unverified user tries to log in -->
+    <div id="login-otp" style="display:none">
+      <h2>Verify your email</h2>
+      <p class="sub">Enter the 6-digit code we just emailed to <strong id="login-otp-email"></strong>.</p>
+      <div class="field">
+        <input id="login-otp-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:8px;font-size:20px;text-align:center" />
+      </div>
+      <p id="login-otp-error" class="error"></p>
+      <button class="btn btn-primary btn-block" id="login-otp-verify" type="button">Verify &amp; continue</button>
+      <p class="center-muted">
+        <a class="link" id="login-otp-resend" href="#">Resend code</a>
+        &nbsp;·&nbsp; <a class="link" id="login-otp-cancel" href="#">Back to login</a>
+      </p>
+    </div>
   </section>
 
   <section class="stay">
@@ -145,41 +160,79 @@
       const password = document.getElementById('password').value;
       const err = document.getElementById('login-error'); err.textContent = '';
 
-      // 1) Supabase first (real authenticated user)
-      if (window.sb) {
-        const { data, error } = await window.sb.auth.signInWithPassword({ email, password });
-        if (!error && data.session) {
-          Session.setToken(data.session.access_token);
-          try {
-            const me = await api('/api/me');
-            setMe(me.user);
-            location.href = '/feed.html';
-            return;
-          } catch (ex) {
-            err.textContent = 'Backend sync failed: ' + ex.message;
-            Session.clear();
-            return;
-          }
-        }
-      }
-
-      // 2) Fallback: real users created via /signup (Supabase unavailable)
+      // 1) Backend first — this enforces our email_verified / OTP gate so it
+      //    can't be bypassed. New accounts always live here (bcrypt password).
       try {
         const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
         Session.setToken(data.token);
         setMe(data.user);
         location.href = '/feed.html';
+        return;
       } catch (ex) {
-        // Surface specific server errors (verification required, rate limit, etc.)
         const msg = (ex && ex.message) ? ex.message : '';
         if (/verify your email/i.test(msg)) {
-          err.innerHTML = msg + ' <a href="/verify-email.html" class="link">Resend link</a>';
-        } else if (/too many/i.test(msg)) {
-          err.textContent = msg;
-        } else {
-          err.textContent = 'Invalid email or password.';
+          // Unverified account: send a fresh OTP and show the verify step.
+          showLoginOtp(email.toLowerCase());
+          return;
         }
+        if (/too many/i.test(msg)) { err.textContent = msg; return; }
+        // 2) Fallback to Supabase Auth for legacy accounts created before the
+        //    backend OTP flow (they have no local bcrypt password to match).
+        if (window.sb) {
+          const { data: sd, error } = await window.sb.auth.signInWithPassword({ email, password });
+          if (!error && sd.session) {
+            Session.setToken(sd.session.access_token);
+            try {
+              const me = await api('/api/me');
+              setMe(me.user);
+              location.href = '/feed.html';
+              return;
+            } catch (e2) { Session.clear(); }
+          }
+        }
+        err.textContent = 'Invalid email or password.';
       }
+    });
+
+    // ===== Inline email-verification (OTP) for unverified logins =====
+    let loginOtpEmail = '';
+    async function showLoginOtp(email) {
+      loginOtpEmail = email;
+      document.getElementById('login-otp-email').textContent = email;
+      document.getElementById('login-form').style.display = 'none';
+      document.getElementById('login-otp').style.display = '';
+      const e = document.getElementById('login-otp-error');
+      e.style.color = ''; e.textContent = 'Sending a code…';
+      try {
+        const r = await api('/api/auth/signup/resend-otp', { method: 'POST', body: { email } });
+        e.textContent = r.dev_otp ? ('Dev code: ' + r.dev_otp) : '';
+      } catch (ex) { e.textContent = ''; }
+      document.getElementById('login-otp-input').focus();
+    }
+    document.getElementById('login-otp-verify').addEventListener('click', async () => {
+      const otp = document.getElementById('login-otp-input').value.trim();
+      const e = document.getElementById('login-otp-error'); e.style.color = ''; e.textContent = '';
+      if (!/^\d{6}$/.test(otp)) { e.textContent = 'Enter the 6-digit code.'; return; }
+      const btn = document.getElementById('login-otp-verify');
+      btn.disabled = true; btn.textContent = 'Verifying…';
+      try {
+        const data = await api('/api/auth/signup/verify-otp', { method: 'POST', body: { email: loginOtpEmail, otp } });
+        Session.setToken(data.token);
+        setMe(data.user);
+        location.href = '/feed.html';
+      } catch (ex) {
+        e.textContent = (ex && ex.message) || 'Verification failed.';
+        btn.disabled = false; btn.textContent = 'Verify & continue';
+      }
+    });
+    document.getElementById('login-otp-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); document.getElementById('login-otp-verify').click(); }
+    });
+    document.getElementById('login-otp-resend').addEventListener('click', (e) => { e.preventDefault(); showLoginOtp(loginOtpEmail); });
+    document.getElementById('login-otp-cancel').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById('login-otp').style.display = 'none';
+      document.getElementById('login-form').style.display = '';
     });
 
     document.getElementById('google-btn').onclick = async () => {

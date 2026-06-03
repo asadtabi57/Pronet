@@ -357,7 +357,35 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-app.use(cors());
+// --- CORS: allow only known origins (frontend is same-origin in prod) ---
+const ALLOWED_ORIGINS = [
+  process.env.APP_URL,
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://localhost:3939',
+].filter(Boolean);
+app.use(cors({
+  origin(origin, cb) {
+    // Same-origin / curl / server-to-server requests have no Origin header.
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(null, false);
+  },
+  credentials: true,
+}));
+
+// --- Baseline security headers (clickjacking, MIME sniffing, HTTPS, etc.) ---
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '0');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 
 // Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
@@ -434,6 +462,67 @@ const forgotLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many password reset attempts. Please try again later.' },
 });
+// Stricter limiter for OTP code verification (brute-force protection).
+const otpVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many code attempts. Please wait a few minutes and try again.' },
+});
+
+// Strong password policy: >=8 chars with upper, lower, number and special.
+function validatePassword(pw) {
+  const s = String(pw || '');
+  if (s.length < 8) return 'Password must be at least 8 characters long.';
+  if (!/[a-z]/.test(s)) return 'Password must include a lowercase letter.';
+  if (!/[A-Z]/.test(s)) return 'Password must include an uppercase letter.';
+  if (!/[0-9]/.test(s)) return 'Password must include a number.';
+  if (!/[^A-Za-z0-9]/.test(s)) return 'Password must include a special character.';
+  return null;
+}
+
+const gen6 = () => String(Math.floor(100000 + Math.random() * 900000));
+
+// Issue a fresh signup OTP for an email: invalidates older codes, stores a
+// bcrypt hash, emails the 6-digit code. Returns the plain otp (for dev fallback).
+async function issueEmailOtp(email, name) {
+  const otp = gen6();
+  const otpHash = bcrypt.hashSync(otp, 10);
+  const expires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  await q(`UPDATE email_otps SET used = 1 WHERE email = $1 AND used = 0`, [email]);
+  await q(
+    `INSERT INTO email_otps (email, otp_hash, purpose, expires_at, used, attempts, created_at)
+     VALUES ($1,$2,'signup',$3,0,0,$4)`,
+    [email, otpHash, expires, Date.now()]
+  );
+  const tpl = mailer.signupOtpTemplate({ name, otp });
+  await mailer.sendMail({ to: email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+  return otp;
+}
+
+// Validate the latest signup OTP. Enforces one-time use, expiry and an attempt
+// cap. On a wrong code we increment attempts and burn the code after 5 misses.
+async function validateEmailOtp(email, otp) {
+  const r = await q(
+    `SELECT id, otp_hash, expires_at, used, attempts FROM email_otps
+      WHERE email = $1 AND purpose = 'signup' ORDER BY created_at DESC LIMIT 1`,
+    [email]
+  );
+  if (r.rowCount === 0) return { ok: false, error: 'No verification code found. Please request a new one.' };
+  const row = r.rows[0];
+  if (row.used === 1) return { ok: false, error: 'This code was already used. Please request a new one.' };
+  if (Number(row.expires_at) < Date.now()) return { ok: false, error: 'This code has expired. Please request a new one.' };
+  if (Number(row.attempts) >= 5) {
+    await q(`UPDATE email_otps SET used = 1 WHERE id = $1`, [row.id]);
+    return { ok: false, error: 'Too many incorrect attempts. Please request a new code.' };
+  }
+  if (!bcrypt.compareSync(String(otp || ''), row.otp_hash)) {
+    await q(`UPDATE email_otps SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
+    return { ok: false, error: 'Incorrect code. Please try again.' };
+  }
+  return { ok: true, id: row.id };
+}
 
 app.get('/api/config', (req, res) => {
   res.json({ supabase_url: SUPABASE_URL || null, supabase_key: SUPABASE_KEY || null });
@@ -472,38 +561,79 @@ function appBaseUrl(req) {
 }
 
 // --- Auth ---
+// Signup step 1: validate, reject duplicate emails, create an UNVERIFIED user
+// and email a 6-digit OTP. No token is returned — the account cannot be used
+// until the OTP is verified (step 2), so verification cannot be bypassed.
 app.post('/api/auth/signup', signupLimiter, wrap(async (req, res) => {
   const { name, email, password, headline } = req.body || {};
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
-  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-  const em = String(email).toLowerCase();
+  const pwErr = validatePassword(password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  const em = String(email).toLowerCase().trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return res.status(400).json({ error: 'Invalid email address' });
+
   const existing = await findUserByEmail(em);
-  if (existing) return res.status(409).json({ error: 'Email already registered' });
-  const token = crypto.randomBytes(32).toString('hex');
-  const expires = Date.now() + 24 * 60 * 60 * 1000; // 24h
-  const ins = await q(
-    `INSERT INTO users (email, password_hash, name, headline, about, location,
-       experience, education, skills, avatar_color, cover_color,
-       email_verified, email_verify_token, email_verify_expires, created_at)
-     VALUES ($1,$2,$3,$4,'','','[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$5,$6,FALSE,$7,$8,$9)
-     RETURNING *`,
-    [em, bcrypt.hashSync(password, 10), name, headline || '',
-     COLORS[Math.floor(Math.random() * COLORS.length)],
-     COVERS[Math.floor(Math.random() * COVERS.length)],
-     token, expires, Date.now()]
-  );
-  const user = ins.rows[0];
-  const link = `${appBaseUrl(req)}/verify-email.html?token=${token}`;
-  const tpl = mailer.verifyEmailTemplate({ name: user.name, link });
-  const mailResult = await mailer.sendMail({ to: em, subject: tpl.subject, html: tpl.html, text: tpl.text });
-  const payload = {
-    user: await publicUser(user, user.id),
-    message: 'Account created. Please check your email to verify your address before logging in.',
-  };
-  // Dev-mode fallback: surface the link so testers aren't blocked when no mailer is configured
-  if (!mailer.configured()) payload.dev_verify_link = link;
+  if (existing && (existing.email_verified || existing.supabase_id || existing.password_hash)) {
+    // A usable account already exists (verified, OAuth, or pending a previous
+    // unverified signup with a password). Don't allow silent takeover.
+    if (existing.email_verified || existing.supabase_id) {
+      return res.status(409).json({ error: 'Email already registered. Please login.' });
+    }
+  }
+
+  let user;
+  if (existing && !existing.email_verified && !existing.supabase_id) {
+    // Re-using an unverified account: refresh its details + password.
+    const upd = await q(
+      `UPDATE users SET name = $1, headline = $2, password_hash = $3 WHERE id = $4 RETURNING *`,
+      [name, headline || '', bcrypt.hashSync(password, 10), existing.id]
+    );
+    user = upd.rows[0];
+  } else {
+    const ins = await q(
+      `INSERT INTO users (email, password_hash, name, headline, about, location,
+         experience, education, skills, avatar_color, cover_color, email_verified, created_at)
+       VALUES ($1,$2,$3,$4,'','','[]'::jsonb,'[]'::jsonb,'[]'::jsonb,$5,$6,FALSE,$7)
+       RETURNING *`,
+      [em, bcrypt.hashSync(password, 10), name, headline || '',
+       COLORS[Math.floor(Math.random() * COLORS.length)],
+       COVERS[Math.floor(Math.random() * COVERS.length)],
+       Date.now()]
+    );
+    user = ins.rows[0];
+  }
+
+  const otp = await issueEmailOtp(em, user.name);
+  const payload = { needs_otp: true, email: em, message: 'We sent a 6-digit verification code to your email.' };
+  if (!mailer.configured()) payload.dev_otp = otp; // dev fallback only
   res.json(payload);
+}));
+
+// Signup step 2: verify the OTP, mark the email verified, and log the user in.
+app.post('/api/auth/signup/verify-otp', otpVerifyLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase().trim();
+  const otp = String((req.body && req.body.otp) || '').trim();
+  if (!em || !otp) return res.status(400).json({ error: 'Email and code are required.' });
+  const v = await validateEmailOtp(em, otp);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const user = await findUserByEmail(em);
+  if (!user) return res.status(400).json({ error: 'Account not found. Please sign up again.' });
+  await q(`UPDATE email_otps SET used = 1 WHERE id = $1`, [v.id]);
+  await q(`UPDATE users SET email_verified = TRUE, email_verify_token = NULL, email_verify_expires = NULL WHERE id = $1`, [user.id]);
+  const fresh = await findUserByEmail(em);
+  res.json({ token: signToken(fresh), user: await publicUser(fresh, fresh.id) });
+}));
+
+// Signup step 2b: resend a fresh OTP (rate-limited). Never reveals account state.
+app.post('/api/auth/signup/resend-otp', verifyLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase().trim();
+  if (!em) return res.status(400).json({ error: 'Email required' });
+  const user = await findUserByEmail(em);
+  if (!user || user.email_verified || !user.password_hash) return res.json({ ok: true });
+  const otp = await issueEmailOtp(em, user.name);
+  const out = { ok: true };
+  if (!mailer.configured()) out.dev_otp = otp;
+  res.json(out);
 }));
 
 app.post('/api/auth/login', loginLimiter, wrap(async (req, res) => {
@@ -1494,6 +1624,12 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
       await q(`DELETE FROM call_signals WHERE created_at < $1`, [Date.now() - 24 * 60 * 60 * 1000]);
       await q(`DELETE FROM calls WHERE created_at < $1`, [Date.now() - 30 * 24 * 60 * 60 * 1000]);
     } catch (e) { /* table may not exist yet before migration */ }
+    // Used or expired email/reset OTPs older than a day are useless — purge them.
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      await q(`DELETE FROM email_otps WHERE used = 1 OR expires_at < $1`, [cutoff]);
+      await q(`DELETE FROM password_reset_otps WHERE used = 1 OR expires_at < $1`, [cutoff]);
+    } catch (e) { /* tables may not exist yet before migration */ }
   }
   cleanupCalls();
   setInterval(cleanupCalls, 6 * 60 * 60 * 1000); // every 6 hours
