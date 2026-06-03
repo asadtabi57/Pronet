@@ -18,11 +18,26 @@ if (!DATABASE_URL) { console.error('DATABASE_URL missing in .env'); process.exit
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  max: 10,
-  idleTimeoutMillis: 30_000,
+  max: 20,
+  // Keep sockets to the Supabase pooler warm. Reconnecting pays a ~1s+ TLS
+  // handshake to the (distant) DB region, so we hold idle connections far
+  // longer and enable TCP keep-alive to avoid silent drops.
+  idleTimeoutMillis: 5 * 60_000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+  connectionTimeoutMillis: 10_000,
+  // Server-side guard: kill any single query that runs longer than 15s so a
+  // pathological query can never pin a pooled connection indefinitely.
+  statement_timeout: 15_000,
 });
 pool.on('error', (err) => console.error('PG pool error', err.message));
 const q = (text, params) => pool.query(text, params);
+
+// Keep at least one connection hot so the first request after an idle period
+// doesn't eat the full cold-connect (TLS) penalty. Cheap heartbeat every 4 min.
+setInterval(() => { q('SELECT 1').catch(() => {}); }, 4 * 60_000).unref();
+// Warm the pool immediately on boot.
+q('SELECT 1').catch(() => {});
 
 // ---------------- Auth helpers ----------------
 function signToken(user) {
@@ -189,55 +204,49 @@ function buildUserDTO(u, viewerId, connectionCount, rel) {
 async function publicUser(u, viewerId) {
   if (!u) return null;
   const uid = Number(u.id);
-  const ccRes = await q(
-    `SELECT COUNT(*)::int AS c FROM connections WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`, [uid]
-  );
-  let rel = null;
-  if (viewerId != null && viewerId !== uid) {
-    const cn = await q(
-      `SELECT user_a, accepted FROM connections
-        WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
-      [viewerId, uid]
-    );
-    rel = cn.rowCount > 0 ? cn.rows[0] : null;
-  }
+  const needRel = viewerId != null && viewerId !== uid;
+  // Count + relationship lookups are independent → run them concurrently.
+  const [ccRes, cn] = await Promise.all([
+    q(`SELECT COUNT(*)::int AS c FROM connections WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`, [uid]),
+    needRel
+      ? q(`SELECT user_a, accepted FROM connections
+            WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`, [viewerId, uid])
+      : Promise.resolve({ rowCount: 0, rows: [] }),
+  ]);
+  const rel = cn.rowCount > 0 ? cn.rows[0] : null;
   return buildUserDTO(u, viewerId, ccRes.rows[0].c, rel);
 }
 
-// Batch version: resolve many users to public DTOs in a fixed number of queries
-// (3 total) instead of N+1. Returns a Map keyed by numeric user id. Use this
-// inside any endpoint that renders a list of users.
+// Batch version: resolve many users to public DTOs. The three lookups (user
+// rows, connection counts, viewer relationships) are independent, so we fire
+// them concurrently — one round-trip's worth of latency instead of three.
+// Returns a Map keyed by numeric user id. Use this for any list of users.
 async function publicUsersByIds(ids, viewerId) {
   const uniq = [...new Set((ids || []).map(Number).filter(Boolean))];
   const map = new Map();
   if (!uniq.length) return map;
 
-  const usersRes = await q(`SELECT * FROM users WHERE id = ANY($1::bigint[])`, [uniq]);
+  const [usersRes, ccRes, relRes] = await Promise.all([
+    q(`SELECT * FROM users WHERE id = ANY($1::bigint[])`, [uniq]),
+    // connection_count for every target in one pass
+    q(`SELECT t AS id, COUNT(*)::int AS c FROM (
+          SELECT user_a AS t FROM connections WHERE accepted = 1 AND user_a = ANY($1::bigint[])
+          UNION ALL
+          SELECT user_b AS t FROM connections WHERE accepted = 1 AND user_b = ANY($1::bigint[])
+       ) z GROUP BY t`, [uniq]),
+    // viewer's relationship to each target in one query
+    viewerId != null
+      ? q(`SELECT user_a, user_b, accepted FROM connections
+            WHERE (user_a = $1 AND user_b = ANY($2::bigint[]))
+               OR (user_b = $1 AND user_a = ANY($2::bigint[]))`, [Number(viewerId), uniq])
+      : Promise.resolve({ rows: [] }),
+  ]);
 
-  // connection_count for every target in one pass
-  const ccRes = await q(
-    `SELECT t AS id, COUNT(*)::int AS c FROM (
-        SELECT user_a AS t FROM connections WHERE accepted = 1 AND user_a = ANY($1::bigint[])
-        UNION ALL
-        SELECT user_b AS t FROM connections WHERE accepted = 1 AND user_b = ANY($1::bigint[])
-     ) z GROUP BY t`,
-    [uniq]
-  );
   const countMap = new Map(ccRes.rows.map(r => [Number(r.id), r.c]));
-
-  // viewer's relationship to each target in one query
   const relMap = new Map();
-  if (viewerId != null) {
-    const relRes = await q(
-      `SELECT user_a, user_b, accepted FROM connections
-        WHERE (user_a = $1 AND user_b = ANY($2::bigint[]))
-           OR (user_b = $1 AND user_a = ANY($2::bigint[]))`,
-      [Number(viewerId), uniq]
-    );
-    for (const row of relRes.rows) {
-      const other = Number(row.user_a) === Number(viewerId) ? Number(row.user_b) : Number(row.user_a);
-      relMap.set(other, row);
-    }
+  for (const row of relRes.rows) {
+    const other = Number(row.user_a) === Number(viewerId) ? Number(row.user_b) : Number(row.user_a);
+    relMap.set(other, row);
   }
 
   for (const u of usersRes.rows) {
@@ -263,18 +272,22 @@ async function notify(userId, type, actorId, payload) {
      VALUES ($1,$2,$3,$4::jsonb,0,$5) RETURNING id, created_at`,
     [userId, type, actorId, JSON.stringify(payload || {}), Date.now()]
   );
-  // Push the new notification to the user in real time (if connected).
-  try {
-    let actor = null;
-    if (actorId) actor = await publicUser(await findUser(Number(actorId)), Number(userId));
-    sseSend(userId, 'notification', {
-      id: Number(ins.rows[0].id),
-      type, actor_id: actorId ? Number(actorId) : null,
-      payload: payload || {}, read: 0,
-      created_at: Number(ins.rows[0].created_at),
-      actor,
-    });
-  } catch (e) { /* realtime is best-effort */ }
+  // Realtime push is best-effort and only matters if the user is connected, so
+  // build the actor DTO and emit it without blocking the caller's response.
+  (async () => {
+    try {
+      if (!sseClients.has(Number(userId))) return; // nobody listening; skip the lookups
+      let actor = null;
+      if (actorId) actor = await publicUser(await findUser(Number(actorId)), Number(userId));
+      sseSend(userId, 'notification', {
+        id: Number(ins.rows[0].id),
+        type, actor_id: actorId ? Number(actorId) : null,
+        payload: payload || {}, read: 0,
+        created_at: Number(ins.rows[0].created_at),
+        actor,
+      });
+    } catch (e) { /* realtime is best-effort */ }
+  })();
 }
 
 // ---------------- Realtime (SSE) hub ----------------
@@ -836,9 +849,17 @@ app.post('/api/auth/forgot-password/reset', forgotLimiter, wrap(async (req, res)
 }));
 
 app.get('/api/me', authRequired, wrap(async (req, res) => {
-  const u = await findUser(req.user.id);
-  if (!u) return res.status(404).json({ error: 'Not found' });
-  res.json({ user: await publicUser(u, u.id) });
+  // Hot path (runs on every page load): fetch the user row and connection count
+  // in a single round-trip instead of two sequential queries.
+  const r = await q(
+    `SELECT u.*, (SELECT COUNT(*)::int FROM connections c
+        WHERE (c.user_a = u.id OR c.user_b = u.id) AND c.accepted = 1) AS connection_count
+       FROM users u WHERE u.id = $1`,
+    [req.user.id]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const u = r.rows[0];
+  res.json({ user: buildUserDTO(u, u.id, u.connection_count, null) });
 }));
 
 app.put('/api/me', authRequired, wrap(async (req, res) => {
@@ -864,10 +885,12 @@ app.put('/api/me', authRequired, wrap(async (req, res) => {
 app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
   const u = await findUser(Number(req.params.id));
   if (!u) return res.status(404).json({ error: 'User not found' });
-  const profile = await publicUser(u, req.user.id);
-  profile.posts = await fetchPostDTOs({
-    viewerId: req.user.id, where: 'p.user_id = $2', params: [u.id], limit: 20
-  });
+  // Profile DTO and the user's posts are independent → fetch concurrently.
+  const [profile, posts] = await Promise.all([
+    publicUser(u, req.user.id),
+    fetchPostDTOs({ viewerId: req.user.id, where: 'p.user_id = $2', params: [u.id], limit: 20 }),
+  ]);
+  profile.posts = posts;
   res.json({ user: profile });
 }));
 
@@ -1402,17 +1425,17 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
 
 app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const other = Number(req.params.userId);
-  const u = await findUser(other);
+  // User lookup, thread fetch, and marking-as-read are independent → run them
+  // together so the whole endpoint costs ~one round-trip of latency.
+  const [u, r] = await Promise.all([
+    findUser(other),
+    q(`SELECT id, from_id, to_id, content, attached_post_id, created_at, read, edited
+         FROM messages
+        WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
+        ORDER BY created_at ASC`, [req.user.id, other]),
+    q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`, [other, req.user.id]),
+  ]);
   if (!u) return res.status(404).json({ error: 'User not found' });
-  const r = await q(
-    `SELECT id, from_id, to_id, content, attached_post_id, created_at, read, edited
-       FROM messages
-      WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
-      ORDER BY created_at ASC`,
-    [req.user.id, other]
-  );
-  await q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`,
-    [other, req.user.id]);
   const messages = r.rows.map(m => ({
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
@@ -1439,11 +1462,18 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
     content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
     created_at: Number(m.created_at), read: m.read, edited: 0,
   };
-  // Realtime fan-out: deliver to the receiver and the sender's other tabs/devices.
-  const sender = await publicUser(await findUser(req.user.id), other);
-  sseSend(other, 'message', { message: dto, peer: sender, action: 'new' });
-  sseSend(req.user.id, 'message', { message: dto, peer: await publicUser(u, req.user.id), action: 'new' });
+  // Respond to the sender immediately; the notification + realtime fan-out (for
+  // the receiver and other tabs) don't need to block the HTTP response.
   res.json({ message: dto });
+  (async () => {
+    await notify(other, 'message', req.user.id, { message_id: Number(m.id) });
+    const [sender, peer] = await Promise.all([
+      publicUser(await findUser(req.user.id), other),
+      publicUser(u, req.user.id),
+    ]);
+    sseSend(other, 'message', { message: dto, peer: sender, action: 'new' });
+    sseSend(req.user.id, 'message', { message: dto, peer, action: 'new' });
+  })().catch(() => {});
 }));
 
 // Edit a message — sender only, within EDIT_WINDOW_MS (2 minutes).
