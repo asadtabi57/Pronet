@@ -84,7 +84,8 @@ html, body {
   text-rendering: optimizeLegibility;
   width: 100%;
 }
-body { overflow-x: hidden; }
+html, body { overflow-x: hidden; max-width: 100%; }
+img, video { max-width: 100%; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
 img, video, svg, iframe { max-width: 100%; display: block; }
@@ -316,7 +317,7 @@ button:focus-visible, a:focus-visible {
 
 /* Auth pages */
 .auth-page {
-  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; min-height: 100dvh; display: flex; align-items: center; justify-content: center;
   background:
     radial-gradient(60% 50% at 20% 10%, #ffe4e1 0%, transparent 60%),
     radial-gradient(50% 50% at 80% 20%, #e8eeff 0%, transparent 60%),
@@ -804,7 +805,9 @@ body.app {
   display: grid; grid-template-columns: 340px 1fr;
   grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - 120px);
+  height: calc(100dvh - 120px);
   min-height: 560px;
+  min-width: 0;
   border-radius: var(--r-lg);
   overflow: hidden;
 }
@@ -1271,7 +1274,7 @@ body.app {
   .search { flex: 1; min-width: 0; }
   .search input { width: 100%; }
 
-  .msg-shell { grid-template-columns: 1fr; height: calc(100vh - 100px); }
+  .msg-shell { grid-template-columns: 1fr; height: calc(100vh - 100px); height: calc(100dvh - 100px); min-height: 0; }
   .msg-shell .msg-conv { display: none; }
   .msg-shell.show-conv .msg-list { display: none; }
   .msg-shell.show-conv .msg-conv { display: flex; }
@@ -1434,7 +1437,7 @@ body.app {
 @media (max-width: 600px) {
   body.search-open { overflow: hidden; }
   body.search-open .app-nav {
-    position: fixed; inset: 0; height: 100vh; z-index: 100;
+    position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 100;
     background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none;
     border-bottom: 1px solid var(--line-2);
     display: block;
@@ -1465,7 +1468,7 @@ body.app {
     order: 3; flex: 1 1 100%;
     position: static !important; width: 100% !important; max-width: none !important;
     box-shadow: none !important; border: 0 !important; border-radius: 0 !important;
-    margin-top: 4px; max-height: calc(100vh - 80px); overflow-y: auto;
+    margin-top: 4px; max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); overflow-y: auto;
   }
   body.search-open .sd-row { padding: 14px 12px; gap: 14px; }
   body.search-open .sd-avatar { width: 44px; height: 44px; flex-shrink: 0; }
@@ -1603,13 +1606,20 @@ body.app {
 }
 .call-overlay.open { display: flex; }
 .call-window {
-  width: min(960px, 96vw); height: min(640px, 92vh);
+  width: min(960px, 96vw); height: min(640px, 92vh); height: min(640px, 92dvh);
+  max-width: 100vw; min-width: 0;
   background: #0b1623; border-radius: 18px; overflow: hidden;
   display: flex; flex-direction: column;
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
 }
-.call-stage { position: relative; flex: 1; background: #0b1623; overflow: hidden; }
-.call-remote { width: 100%; height: 100%; object-fit: cover; background: #0b1623; }
+.call-stage { position: relative; flex: 1; min-width: 0; min-height: 0; background: #0b1623; overflow: hidden; }
+/* `contain` (not cover) so a widescreen desktop screen-share fits inside the
+   frame on narrow mobile screens instead of overflowing the container. */
+.call-remote {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; max-width: 100%; max-height: 100%;
+  object-fit: contain; background: #0b1623;
+}
 .call-remote-audio {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 16px; color: #fff;
@@ -1617,7 +1627,7 @@ body.app {
 .call-peer-name { font-size: 22px; font-weight: 700; }
 .call-local {
   position: absolute; right: 16px; bottom: 16px;
-  width: 168px; height: 116px; object-fit: cover;
+  width: 168px; height: 116px; max-width: 40%; max-height: 30%; object-fit: cover;
   border-radius: 12px; border: 2px solid rgba(255,255,255,0.25);
   background: #111; box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 2;
 }
@@ -1701,7 +1711,7 @@ body.app {
 .call-log-line .cll-icon { margin-right: 6px; }
 
 @media (max-width: 600px) {
-  .call-window { width: 100vw; height: 100vh; border-radius: 0; }
+  .call-window { width: 100vw; height: 100vh; height: 100dvh; max-width: 100vw; border-radius: 0; }
   .call-local { width: 110px; height: 76px; right: 10px; bottom: 10px; }
   .call-controls { gap: 12px; }
   .call-ctrl .ci { width: 48px; height: 48px; font-size: 20px; }

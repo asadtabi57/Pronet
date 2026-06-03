@@ -10,21 +10,32 @@ const Session = (() => {
   const AUTH_KEY = 'authed';
   const USER_KEY = 'user';
   const LAST_KEY = 'last_activity';
+  const AUTHED_AT_KEY = 'authed_at';
 
   function now() { return Date.now(); }
 
   function setAuthed() {
     sessionStorage.setItem(AUTH_KEY, '1');
     sessionStorage.setItem(LAST_KEY, String(now()));
+    sessionStorage.setItem(AUTHED_AT_KEY, String(now()));
+    clearRedirectGuard();
   }
   // Back-compat: older call sites passed a token string. We no longer store the
   // token (it's in the httpOnly cookie); just record that we're authenticated.
   function setToken(_t) { setAuthed(); }
   function isAuthed() { return sessionStorage.getItem(AUTH_KEY) === '1'; }
+  // True for a short grace window right after login/signup. On mobile the
+  // httpOnly cookie can lag a beat behind the redirect, so a request fired in
+  // this window that 401s should be retried — not treated as a dead session.
+  function justAuthed() {
+    const v = Number(sessionStorage.getItem(AUTHED_AT_KEY) || 0);
+    return v > 0 && (now() - v) < 12000;
+  }
   function clear() {
     sessionStorage.removeItem(AUTH_KEY);
     sessionStorage.removeItem(USER_KEY);
     sessionStorage.removeItem(LAST_KEY);
+    sessionStorage.removeItem(AUTHED_AT_KEY);
   }
   function touch() {
     if (isAuthed()) {
@@ -47,11 +58,28 @@ const Session = (() => {
     if (!last) return IDLE_MS;
     return Math.max(0, IDLE_MS - (now() - last));
   }
-  return { setAuthed, setToken, isAuthed, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
+  return { setAuthed, setToken, isAuthed, justAuthed, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
 })();
 
+// Circuit breaker for the auth redirect. If the app bounces to the landing page
+// too many times in a short window (e.g. a flaky mobile network momentarily
+// dropping the session cookie), we STOP redirecting so the user isn't trapped
+// in an infinite reload loop. Cleared on any successful authenticated request.
+const REDIRECT_GUARD_KEY = 'pn_redirect_guard';
+function clearRedirectGuard() { try { localStorage.removeItem(REDIRECT_GUARD_KEY); } catch (e) {} }
+function redirectLoopTripped() {
+  try {
+    const nowT = Date.now();
+    const arr = (JSON.parse(localStorage.getItem(REDIRECT_GUARD_KEY) || '[]'))
+      .filter(t => nowT - t < 8000);
+    arr.push(nowT);
+    localStorage.setItem(REDIRECT_GUARD_KEY, JSON.stringify(arr));
+    return arr.length > 4; // >4 bounces in 8s -> break the loop
+  } catch (e) { return false; }
+}
+
 // ===== Shared API + helpers =====
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body, _retried = false } = {}) {
   // Enforce idle timeout before every request
   if (Session.isExpired()) { await signOut('Session expired due to inactivity.'); throw new Error('Session expired'); }
 
@@ -64,9 +92,19 @@ async function api(path, { method = 'GET', body } = {}) {
   });
   let data = {};
   try { data = await res.json(); } catch (e) {}
-  if (res.status === 401) { await signOut(); throw new Error('Unauthorized'); }
+  if (res.status === 401) {
+    // Just-logged-in grace window: the httpOnly cookie can lag a beat on mobile,
+    // so a 401 here is likely a race, not a dead session. Retry once before
+    // tearing down the session (which would otherwise cause a redirect loop).
+    if (!_retried && Session.isAuthed() && Session.justAuthed()) {
+      await new Promise(r => setTimeout(r, 700));
+      return api(path, { method, body, _retried: true });
+    }
+    await signOut(); throw new Error('Unauthorized');
+  }
   if (!res.ok) throw new Error(data.error || ('Request failed: ' + res.status));
   Session.touch();
+  clearRedirectGuard(); // a successful request proves the session is healthy
   return data;
 }
 
@@ -86,7 +124,11 @@ async function exchangeSupabaseSession(accessToken) {
 }
 window.exchangeSupabaseSession = exchangeSupabaseSession;
 
+let _signingOut = false;
 async function signOut(reason) {
+  if (_signingOut) return; // collapse the parallel-401 storm into one teardown
+  _signingOut = true;
+  try { if (window.RT && RT.stop) RT.stop(); } catch (e) {}
   try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) {}
   try { if (window.sb) await window.sb.auth.signOut(); } catch (e) {}
   Session.clear();
@@ -96,8 +138,15 @@ async function signOut(reason) {
     try { sessionStorage.setItem('signout_reason', reason); } catch (e) {}
   }
   if (location.pathname !== '/' && location.pathname !== '/index.html') {
+    // Circuit breaker: bail out of redirecting if we're caught in a bounce loop.
+    if (redirectLoopTripped()) {
+      try { sessionStorage.setItem('signout_reason', 'Could not keep you signed in. Please log in again.'); } catch (e) {}
+      clearRedirectGuard();
+    }
     location.href = '/';
+    return;
   }
+  _signingOut = false; // already on landing page; allow future sign-outs
 }
 
 function initials(name) {
@@ -105,11 +154,16 @@ function initials(name) {
 }
 
 // ===== Realtime event bus (SSE) =====
-// Single EventSource per tab, authenticated via the session token. Components
-// subscribe with RT.on('message'|'notification'|'call', cb). Auto-reconnects.
+// Single EventSource per tab, authenticated via the httpOnly session cookie.
+// Components subscribe with RT.on('message'|'notification'|'call'|'presence', cb).
+// Reconnects with capped exponential backoff. It NEVER reloads the page — a
+// dropped or unauthorized stream must not be able to trigger window.reload().
 const RT = (() => {
   let es = null;
   let started = false;
+  let retry = 0;
+  let reconnectTimer = null;
+  let stopped = false;
   const handlers = { message: new Set(), notification: new Set(), call: new Set(), presence: new Set(), ready: new Set() };
 
   function emit(type, data) {
@@ -118,13 +172,25 @@ const RT = (() => {
     set.forEach(cb => { try { cb(data); } catch (e) { console.error('RT handler', e); } });
   }
 
-  function connect() {
-    if (!Session.isAuthed()) return;
-    try { if (es) es.close(); } catch (e) {}
-    // The httpOnly auth cookie is sent automatically on this same-origin request.
-    es = new EventSource('/api/events');
+  function scheduleReconnect() {
+    if (reconnectTimer || stopped) return;
+    if (!Session.isAuthed()) return; // logged out -> stop trying
+    const delay = Math.min(30000, 1000 * Math.pow(2, retry)); // 1s,2s,4s… cap 30s
+    retry++;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+  }
 
-    es.addEventListener('ready', (e) => emit('ready', safeParse(e.data)));
+  function connect() {
+    if (stopped || !Session.isAuthed()) return;
+    try { if (es) es.close(); } catch (e) {}
+    es = null;
+    try {
+      // The httpOnly auth cookie is sent automatically on this same-origin request.
+      es = new EventSource('/api/events');
+    } catch (e) { scheduleReconnect(); return; }
+
+    es.onopen = () => { retry = 0; }; // healthy stream -> reset backoff
+    es.addEventListener('ready', (e) => { retry = 0; emit('ready', safeParse(e.data)); });
     es.addEventListener('message', (e) => emit('message', safeParse(e.data)));
     es.addEventListener('notification', (e) => emit('notification', safeParse(e.data)));
     es.addEventListener('presence', (e) => emit('presence', safeParse(e.data)));
@@ -133,8 +199,12 @@ const RT = (() => {
       es.addEventListener(ev, (e) => emit('call', { event: ev, data: safeParse(e.data) }));
     });
     es.onerror = () => {
-      // EventSource auto-reconnects, but if the token rotated we rebuild it.
-      // Browser handles backoff; nothing required here.
+      // EventSource can't read the HTTP status, so treat every error as a
+      // transient drop: close, then silently reconnect with backoff. Crucially,
+      // we do NOT reload the page or sign the user out from here.
+      try { es && es.close(); } catch (e) {}
+      es = null;
+      scheduleReconnect();
     };
   }
 
@@ -143,12 +213,22 @@ const RT = (() => {
   function start() {
     if (started) return;
     started = true;
+    stopped = false;
     connect();
     // Reconnect cleanly if the tab returns to foreground after sleeping.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && es && es.readyState === 2) connect();
+      if (document.visibilityState === 'visible' && (!es || es.readyState === 2)) {
+        retry = 0; connect();
+      }
     });
     window.addEventListener('beforeunload', () => { try { es && es.close(); } catch (e) {} });
+  }
+
+  function stop() {
+    stopped = true;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    try { if (es) es.close(); } catch (e) {}
+    es = null;
   }
 
   function on(type, cb) {
@@ -157,7 +237,7 @@ const RT = (() => {
     return () => handlers[type].delete(cb);
   }
 
-  return { start, on };
+  return { start, stop, on };
 })();
 window.RT = RT;
 
