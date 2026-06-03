@@ -1466,3 +1466,180 @@ body.app {
 
 /* Avatars are clickable */
 .avatar.img { cursor: zoom-in; }
+
+/* ==========================================================================
+   FORGOT PASSWORD MODAL
+   ========================================================================== */
+.fp-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.55);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  padding: 20px;
+}
+.fp-overlay.open { display: flex; }
+.fp-modal {
+  position: relative;
+  width: 100%; max-width: 420px;
+  background: #fff; border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  padding: 28px 26px 26px;
+  animation: fpIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes fpIn { from { transform: translateY(14px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+.fp-close {
+  position: absolute; top: 12px; right: 14px;
+  background: none; border: 0; font-size: 26px; line-height: 1;
+  color: #94a3b8; cursor: pointer; padding: 4px;
+}
+.fp-close:hover { color: #475569; }
+.fp-modal h3 { margin: 0 0 6px; font-size: 20px; color: #0f172a; }
+.fp-sub { margin: 0 0 18px; color: #64748b; font-size: 14px; line-height: 1.5; }
+.fp-field { margin-bottom: 14px; }
+.fp-field label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px; }
+.fp-field input {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid #d8dee7; border-radius: 10px;
+  padding: 12px 14px; font-size: 15px; outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fp-field input:focus { border-color: #0a66c2; box-shadow: 0 0 0 4px rgba(10, 102, 194, 0.12); }
+#fp-otp { letter-spacing: 8px; text-align: center; font-size: 22px; font-weight: 700; }
+.fp-msg { min-height: 18px; margin: 4px 0 12px; font-size: 13px; }
+.fp-msg.err { color: #dc2626; }
+.fp-msg.ok { color: #059669; }
+.fp-modal .center-muted { margin-top: 14px; font-size: 13px; text-align: center; color: #64748b; }
+.fp-success {
+  width: 64px; height: 64px; margin: 0 auto 16px;
+  border-radius: 50%; background: #dcfce7; color: #16a34a;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 34px; font-weight: 800;
+}
+.fp-step[data-step="done"] { text-align: center; }
+
+/* ==========================================================================
+   CALLS — in-call window, incoming modal, controls, logs
+   ========================================================================== */
+.call-icon-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 1px solid var(--line); background: #fff; color: #0a66c2;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; margin-right: 6px;
+  transition: background 0.15s, transform 0.1s;
+}
+.call-icon-btn:hover { background: #eaf3fb; }
+.call-icon-btn:active { transform: scale(0.94); }
+.conv-head-actions { display: inline-flex; align-items: center; }
+
+/* In-call overlay */
+.call-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(8, 12, 20, 0.86);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.call-overlay.open { display: flex; }
+.call-window {
+  width: min(960px, 96vw); height: min(640px, 92vh);
+  background: #0b1623; border-radius: 18px; overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+}
+.call-stage { position: relative; flex: 1; background: #0b1623; overflow: hidden; }
+.call-remote { width: 100%; height: 100%; object-fit: cover; background: #0b1623; }
+.call-remote-audio {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 16px; color: #fff;
+}
+.call-peer-name { font-size: 22px; font-weight: 700; }
+.call-local {
+  position: absolute; right: 16px; bottom: 16px;
+  width: 168px; height: 116px; object-fit: cover;
+  border-radius: 12px; border: 2px solid rgba(255,255,255,0.25);
+  background: #111; box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 2;
+}
+.call-topbar {
+  position: absolute; top: 14px; left: 0; right: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.call-status-pill {
+  background: rgba(0,0,0,0.5); color: #fff; padding: 6px 14px;
+  border-radius: 999px; font-size: 13px; font-weight: 600;
+}
+.call-timer {
+  background: rgba(0,0,0,0.5); color: #d1fae5; padding: 6px 12px;
+  border-radius: 999px; font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.call-avatar {
+  width: 110px; height: 110px; border-radius: 50%; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: #1f2a3a;
+}
+.call-avatar.lg { width: 96px; height: 96px; }
+.call-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.call-avatar .ci-letters {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 36px; font-weight: 700;
+}
+.call-controls {
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  padding: 16px; background: #0e1a2b;
+}
+.call-ctrl {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: none; border: 0; cursor: pointer; color: #cbd5e1; font-size: 11px;
+}
+.call-ctrl .ci {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: #1e2c40; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; transition: background 0.15s, transform 0.1s;
+}
+.call-ctrl:hover .ci { background: #27384f; }
+.call-ctrl:active .ci { transform: scale(0.92); }
+.call-ctrl.off .ci { background: #475569; color: #fff; }
+.call-ctrl.call-end .ci { background: #dc2626; color: #fff; }
+.call-ctrl.call-end:hover .ci { background: #b91c1c; }
+
+/* Incoming call modal */
+.call-incoming {
+  position: fixed; inset: 0; z-index: 10001;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(8, 12, 20, 0.5);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.call-incoming.open { display: flex; }
+.call-incoming-card {
+  width: min(340px, 92vw); background: #fff; border-radius: 18px;
+  padding: 28px 22px; text-align: center;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.35);
+  animation: fpIn 220ms cubic-bezier(0.16,1,0.3,1);
+}
+.call-incoming-card .call-avatar { margin: 0 auto 14px; }
+.inc-name { font-size: 19px; font-weight: 700; color: #0f172a; }
+.inc-sub { color: #64748b; font-size: 14px; margin-top: 4px; margin-bottom: 22px; }
+.inc-actions { display: flex; gap: 16px; justify-content: center; }
+.inc-btn {
+  flex: 1; max-width: 130px; border: 0; cursor: pointer; color: #fff;
+  padding: 12px; border-radius: 12px; font-weight: 600; font-size: 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.inc-btn span { font-size: 18px; }
+.inc-btn.accept { background: #16a34a; }
+.inc-btn.accept:hover { background: #15803d; }
+.inc-btn.reject { background: #dc2626; }
+.inc-btn.reject:hover { background: #b91c1c; }
+
+/* Call log lines inside a conversation */
+.call-log-line {
+  text-align: center; color: #64748b; font-size: 12.5px;
+  margin: 10px auto; padding: 6px 14px; background: #f1f5f9;
+  border-radius: 999px; width: fit-content; max-width: 80%;
+}
+.call-log-line .cll-icon { margin-right: 6px; }
+
+@media (max-width: 600px) {
+  .call-window { width: 100vw; height: 100vh; border-radius: 0; }
+  .call-local { width: 110px; height: 76px; right: 10px; bottom: 10px; }
+  .call-controls { gap: 12px; }
+  .call-ctrl .ci { width: 48px; height: 48px; font-size: 20px; }
+}

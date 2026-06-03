@@ -48,7 +48,7 @@
       </div>
       <div class="row-between">
         <span class="muted-small">Your session ends after 5 minutes of inactivity.</span>
-        <a href="#" class="link">Forgot Password?</a>
+        <a href="#" class="link" id="forgot-link">Forgot Password?</a>
       </div>
       <p id="login-error" class="error"></p>
       <button class="btn btn-primary btn-block" type="submit">Sign In</button>
@@ -67,6 +67,62 @@
     <div><h4>Address</h4><p>123 Networking Ave, City, State</p></div>
     <div><h4>Phone</h4><p>+1 (555) 123-4567</p></div>
     <div><h4>Email</h4><p>info@professionalsnetwork.com</p></div>
+  </div>
+
+  <!-- Forgot password modal -->
+  <div id="fp-overlay" class="fp-overlay" aria-hidden="true">
+    <div class="fp-modal" role="dialog" aria-modal="true" aria-labelledby="fp-title">
+      <button type="button" class="fp-close" id="fp-close" aria-label="Close">&times;</button>
+
+      <!-- Step 1: email -->
+      <div class="fp-step" data-step="email">
+        <h3 id="fp-title">Reset your password</h3>
+        <p class="fp-sub">Enter the email linked to your account and we'll send you a 6-digit code.</p>
+        <div class="fp-field">
+          <label for="fp-email">Email address</label>
+          <input id="fp-email" type="email" placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <p class="fp-msg" id="fp-msg-email"></p>
+        <button class="btn btn-primary btn-block" id="fp-send-btn" type="button">Send code</button>
+      </div>
+
+      <!-- Step 2: OTP -->
+      <div class="fp-step" data-step="otp" hidden>
+        <h3>Enter the code</h3>
+        <p class="fp-sub">We sent a 6-digit code to <b id="fp-email-echo"></b>. It expires in 10 minutes.</p>
+        <div class="fp-field">
+          <label for="fp-otp">6-digit code</label>
+          <input id="fp-otp" type="text" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code" />
+        </div>
+        <p class="fp-msg" id="fp-msg-otp"></p>
+        <button class="btn btn-primary btn-block" id="fp-verify-btn" type="button">Verify code</button>
+        <p class="center-muted"><a href="#" class="link" id="fp-resend">Resend code</a> · <a href="#" class="link" id="fp-back-email">Change email</a></p>
+      </div>
+
+      <!-- Step 3: new password -->
+      <div class="fp-step" data-step="password" hidden>
+        <h3>Set a new password</h3>
+        <p class="fp-sub">Choose a strong password you haven't used before.</p>
+        <div class="fp-field">
+          <label for="fp-pass">New password</label>
+          <input id="fp-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password" />
+        </div>
+        <div class="fp-field">
+          <label for="fp-pass2">Confirm password</label>
+          <input id="fp-pass2" type="password" placeholder="Re-enter new password" autocomplete="new-password" />
+        </div>
+        <p class="fp-msg" id="fp-msg-pass"></p>
+        <button class="btn btn-primary btn-block" id="fp-reset-btn" type="button">Update password</button>
+      </div>
+
+      <!-- Step 4: success -->
+      <div class="fp-step" data-step="done" hidden>
+        <div class="fp-success">✓</div>
+        <h3>Password updated</h3>
+        <p class="fp-sub">You can now sign in with your new password.</p>
+        <button class="btn btn-primary btn-block" id="fp-done-btn" type="button">Back to sign in</button>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -134,6 +190,119 @@
       });
       if (error) alert(error.message);
     };
+
+    // ===== Forgot password modal =====
+    (function () {
+      const overlay = document.getElementById('fp-overlay');
+      let fpEmail = '';
+      let fpOtp = '';
+
+      const steps = overlay.querySelectorAll('.fp-step');
+      function show(step) {
+        steps.forEach(s => { s.hidden = s.dataset.step !== step; });
+      }
+      function open() {
+        overlay.classList.add('open');
+        overlay.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        // Prefill from the login email field if present
+        const le = document.getElementById('email').value.trim();
+        if (le) document.getElementById('fp-email').value = le;
+        show('email');
+        clearMsgs();
+        setTimeout(() => document.getElementById('fp-email').focus(), 50);
+      }
+      function close() {
+        overlay.classList.remove('open');
+        overlay.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+      }
+      function clearMsgs() {
+        ['fp-msg-email','fp-msg-otp','fp-msg-pass'].forEach(id => {
+          const e = document.getElementById(id); e.textContent = ''; e.className = 'fp-msg';
+        });
+      }
+      function msg(id, text, ok) {
+        const e = document.getElementById(id);
+        e.textContent = text;
+        e.className = 'fp-msg' + (ok ? ' ok' : text ? ' err' : '');
+      }
+      function busy(btn, on, label) {
+        btn.disabled = on;
+        if (on) { btn.dataset.label = btn.textContent; btn.textContent = label || 'Please wait…'; }
+        else if (btn.dataset.label) { btn.textContent = btn.dataset.label; }
+      }
+
+      document.getElementById('forgot-link').addEventListener('click', (e) => { e.preventDefault(); open(); });
+      document.getElementById('fp-close').addEventListener('click', close);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('open')) close(); });
+
+      // Step 1 → send code
+      async function sendCode() {
+        const email = document.getElementById('fp-email').value.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { msg('fp-msg-email', 'Please enter a valid email address.'); return; }
+        const btn = document.getElementById('fp-send-btn');
+        busy(btn, true, 'Sending…');
+        try {
+          const r = await api('/api/auth/forgot-password/request', { method: 'POST', body: { email } });
+          fpEmail = email;
+          document.getElementById('fp-email-echo').textContent = email;
+          if (r && r.dev_otp) msg('fp-msg-otp', 'Dev mode code: ' + r.dev_otp, true);
+          show('otp');
+          setTimeout(() => document.getElementById('fp-otp').focus(), 50);
+        } catch (ex) {
+          msg('fp-msg-email', ex.message || 'Something went wrong. Try again.');
+        } finally { busy(btn, false); }
+      }
+      document.getElementById('fp-send-btn').addEventListener('click', sendCode);
+      document.getElementById('fp-resend').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
+      document.getElementById('fp-back-email').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
+
+      // Step 2 → verify code
+      document.getElementById('fp-verify-btn').addEventListener('click', async () => {
+        const otp = document.getElementById('fp-otp').value.trim();
+        if (!/^\d{6}$/.test(otp)) { msg('fp-msg-otp', 'Enter the 6-digit code.'); return; }
+        const btn = document.getElementById('fp-verify-btn');
+        busy(btn, true, 'Verifying…');
+        try {
+          await api('/api/auth/forgot-password/verify', { method: 'POST', body: { email: fpEmail, otp } });
+          fpOtp = otp;
+          show('password');
+          setTimeout(() => document.getElementById('fp-pass').focus(), 50);
+        } catch (ex) {
+          msg('fp-msg-otp', ex.message || 'Invalid code.');
+        } finally { busy(btn, false); }
+      });
+
+      // Step 3 → reset password
+      document.getElementById('fp-reset-btn').addEventListener('click', async () => {
+        const p1 = document.getElementById('fp-pass').value;
+        const p2 = document.getElementById('fp-pass2').value;
+        if (p1.length < 6) { msg('fp-msg-pass', 'Password must be at least 6 characters.'); return; }
+        if (p1 !== p2) { msg('fp-msg-pass', 'Passwords do not match.'); return; }
+        const btn = document.getElementById('fp-reset-btn');
+        busy(btn, true, 'Updating…');
+        try {
+          await api('/api/auth/forgot-password/reset', { method: 'POST', body: { email: fpEmail, otp: fpOtp, password: p1 } });
+          show('done');
+        } catch (ex) {
+          msg('fp-msg-pass', ex.message || 'Could not update password.');
+        } finally { busy(btn, false); }
+      });
+
+      document.getElementById('fp-done-btn').addEventListener('click', () => {
+        close();
+        const le = document.getElementById('email');
+        if (fpEmail) le.value = fpEmail;
+        document.getElementById('password').focus();
+      });
+
+      // Enter-key convenience
+      document.getElementById('fp-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCode(); } });
+      document.getElementById('fp-otp').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('fp-verify-btn').click(); } });
+      document.getElementById('fp-pass2').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('fp-reset-btn').click(); } });
+    })();
   </script>
 </body>
 </html>

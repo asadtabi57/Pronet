@@ -90,6 +90,62 @@ function initials(name) {
   return (name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('');
 }
 
+// ===== Realtime event bus (SSE) =====
+// Single EventSource per tab, authenticated via the session token. Components
+// subscribe with RT.on('message'|'notification'|'call', cb). Auto-reconnects.
+const RT = (() => {
+  let es = null;
+  let started = false;
+  const handlers = { message: new Set(), notification: new Set(), call: new Set(), ready: new Set() };
+
+  function emit(type, data) {
+    const set = handlers[type];
+    if (!set) return;
+    set.forEach(cb => { try { cb(data); } catch (e) { console.error('RT handler', e); } });
+  }
+
+  function connect() {
+    const token = Session.getToken();
+    if (!token) return;
+    try { if (es) es.close(); } catch (e) {}
+    es = new EventSource('/api/events?token=' + encodeURIComponent(token));
+
+    es.addEventListener('ready', (e) => emit('ready', safeParse(e.data)));
+    es.addEventListener('message', (e) => emit('message', safeParse(e.data)));
+    es.addEventListener('notification', (e) => emit('notification', safeParse(e.data)));
+    // All call signaling events funnel through a single 'call' handler.
+    ['call_invite','call_accept','call_reject','call_end','call_signal','call_cancel'].forEach(ev => {
+      es.addEventListener(ev, (e) => emit('call', { event: ev, data: safeParse(e.data) }));
+    });
+    es.onerror = () => {
+      // EventSource auto-reconnects, but if the token rotated we rebuild it.
+      // Browser handles backoff; nothing required here.
+    };
+  }
+
+  function safeParse(s) { try { return JSON.parse(s); } catch (e) { return {}; } }
+
+  function start() {
+    if (started) return;
+    started = true;
+    connect();
+    // Reconnect cleanly if the tab returns to foreground after sleeping.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && es && es.readyState === 2) connect();
+    });
+    window.addEventListener('beforeunload', () => { try { es && es.close(); } catch (e) {} });
+  }
+
+  function on(type, cb) {
+    if (!handlers[type]) handlers[type] = new Set();
+    handlers[type].add(cb);
+    return () => handlers[type].delete(cb);
+  }
+
+  return { start, on };
+})();
+window.RT = RT;
+
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return s + 's';
@@ -206,54 +262,62 @@ async function renderNav(activeTab) {
 
   installSearchTypeahead();
 
-  // Live-refresh badges every 30s so incoming requests/messages show up without page reload
+  // Shared badge setter (also used by realtime listeners).
+  window.setNavBadge = function (id, count) {
+    const link = document.querySelector(`.nav-tab[href*="${id}"]`);
+    if (!link) return;
+    let badge = link.querySelector('.badge');
+    if (count > 0) {
+      const text = count > 99 ? '99+' : String(count);
+      if (badge) badge.textContent = text;
+      else link.insertAdjacentHTML('beforeend', `<span class="badge">${text}</span>`);
+    } else if (badge) badge.remove();
+  };
+
+  async function refreshBadges() {
+    try {
+      const [n, t] = await Promise.all([api('/api/notifications'), api('/api/messages/threads')]);
+      window.__unreadNotif = n.unread || 0;
+      window.__unreadMsgs  = (t.threads || []).reduce((sum, x) => sum + (x.unread || 0), 0);
+      window.setNavBadge('notifications.html', window.__unreadNotif);
+      window.setNavBadge('messages.html', window.__unreadMsgs);
+    } catch (e) {}
+  }
+  window.refreshNavBadges = refreshBadges;
+
   if (!window.__navPollStarted) {
     window.__navPollStarted = true;
-    setInterval(async () => {
-      try {
-        const [n, t] = await Promise.all([api('/api/notifications'), api('/api/messages/threads')]);
-        const newNotif = n.unread || 0;
-        const newMsgs  = (t.threads || []).reduce((sum, x) => sum + (x.unread || 0), 0);
-        const setBadge = (id, count) => {
-          const link = document.querySelector(`.nav-tab[href*="${id}"]`);
-          if (!link) return;
-          let badge = link.querySelector('.badge');
-          if (count > 0) {
-            const text = count > 99 ? '99+' : String(count);
-            if (badge) badge.textContent = text;
-            else link.insertAdjacentHTML('beforeend', `<span class="badge">${text}</span>`);
-          } else if (badge) badge.remove();
-        };
-        setBadge('notifications.html', newNotif);
-        setBadge('messages.html', newMsgs);
-      } catch (e) {}
-    }, 30000);
+
+    // Start the realtime stream once per tab.
+    RT.start();
+
+    // Live badge bumps from realtime events (instant, no refresh).
+    RT.on('notification', () => {
+      // Don't bump while sitting on the notifications page (it marks them read).
+      if (location.pathname.includes('notifications')) return;
+      window.__unreadNotif = (window.__unreadNotif || 0) + 1;
+      window.setNavBadge('notifications.html', window.__unreadNotif);
+    });
+    RT.on('message', (d) => {
+      const me = getMe();
+      // Only count messages addressed TO me, and not while I'm on the messaging page.
+      if (!d || !d.message || !me) return;
+      if (d.message.to_id !== me.id) return;
+      if (location.pathname.includes('messages')) return;
+      window.__unreadMsgs = (window.__unreadMsgs || 0) + 1;
+      window.setNavBadge('messages.html', window.__unreadMsgs);
+    });
+
+    refreshBadges();
+    // Fallback poll (covers missed SSE events / multi-instance). 60s is plenty now.
+    setInterval(refreshBadges, 60000);
   }
 
-  // Scroll direction → toggle body.scroll-down so sidebars collapse for more feed room
-  if (!window.__scrollDirStarted) {
-    window.__scrollDirStarted = true;
-    let lastY = window.scrollY;
-    let ticking = false;
-    const THRESHOLD = 8;
-    window.addEventListener('scroll', () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(() => {
-        const y = window.scrollY;
-        const dy = y - lastY;
-        if (y < 80) {
-          document.body.classList.remove('scroll-down');
-        } else if (dy > THRESHOLD) {
-          document.body.classList.add('scroll-down');
-        } else if (dy < -THRESHOLD) {
-          document.body.classList.remove('scroll-down');
-        }
-        lastY = y;
-        ticking = false;
-      });
-    }, { passive: true });
-  }
+  // NOTE: The previous scroll-direction sidebar-collapse behaviour was removed.
+  // Collapsing the sidebars on scroll changed the page height, which re-triggered
+  // the scroll event and caused the desktop layout to shake/oscillate. The layout
+  // now stays stable with sidebars always visible on desktop.
+  document.body.classList.remove('scroll-down');
 }
 
 // ===== Live search typeahead =====

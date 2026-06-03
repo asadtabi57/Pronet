@@ -71,5 +71,12 @@
     await api('/api/notifications/read', { method: 'POST' });
   }
 
+  // Live updates: re-render when a new notification arrives in real time.
+  let rtTimer = null;
+  RT.on('notification', () => {
+    clearTimeout(rtTimer);
+    rtTimer = setTimeout(render, 300);
+  });
+
   render();
 })();

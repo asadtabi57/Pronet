@@ -92,6 +92,7 @@ async function authRequired(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    req.user.id = Number(req.user.id); // BIGINT ids are strings in the JWT; normalize for comparisons
     return next();
   } catch (e) { /* try supabase */ }
   const sbUser = await verifySupabaseToken(token);
@@ -153,11 +154,66 @@ async function findUserByEmail(email) {
 
 async function notify(userId, type, actorId, payload) {
   if (userId === actorId) return;
-  await q(
+  const ins = await q(
     `INSERT INTO notifications (user_id, type, actor_id, payload, read, created_at)
-     VALUES ($1,$2,$3,$4::jsonb,0,$5)`,
+     VALUES ($1,$2,$3,$4::jsonb,0,$5) RETURNING id, created_at`,
     [userId, type, actorId, JSON.stringify(payload || {}), Date.now()]
   );
+  // Push the new notification to the user in real time (if connected).
+  try {
+    let actor = null;
+    if (actorId) actor = await publicUser(await findUser(Number(actorId)), Number(userId));
+    sseSend(userId, 'notification', {
+      id: Number(ins.rows[0].id),
+      type, actor_id: actorId ? Number(actorId) : null,
+      payload: payload || {}, read: 0,
+      created_at: Number(ins.rows[0].created_at),
+      actor,
+    });
+  } catch (e) { /* realtime is best-effort */ }
+}
+
+// ---------------- Realtime (SSE) hub ----------------
+// Authenticated Server-Sent-Events. Each logged-in user can have multiple
+// connections (tabs/devices). Used for live messages, notifications and
+// WebRTC call signaling. Single-instance friendly (Railway hobby = 1 instance).
+const sseClients = new Map(); // userId(Number) -> Set<res>
+
+function sseAdd(userId, res) {
+  const key = Number(userId);
+  if (!sseClients.has(key)) sseClients.set(key, new Set());
+  sseClients.get(key).add(res);
+}
+function sseRemove(userId, res) {
+  const key = Number(userId);
+  const set = sseClients.get(key);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) sseClients.delete(key);
+}
+function sseSend(userId, event, data) {
+  const set = sseClients.get(Number(userId));
+  if (!set || set.size === 0) return;
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of set) {
+    try { res.write(payload); } catch (e) { /* dead connection; cleaned on close */ }
+  }
+}
+
+// Resolve a user id from a raw token (JWT first, then Supabase). For SSE the
+// token arrives as a query param because EventSource can't set headers.
+async function resolveUserFromToken(token) {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return { id: Number(decoded.id), email: decoded.email, name: decoded.name };
+  } catch (e) { /* try supabase */ }
+  const sbUser = await verifySupabaseToken(token);
+  if (!sbUser) return null;
+  try {
+    const local = await ensureLocalUserFromSupabase(sbUser);
+    return { id: Number(local.id), email: local.email, name: local.name };
+  } catch (e) { return null; }
 }
 
 // Fetch posts as feed DTOs (one query with subselects)
@@ -239,7 +295,14 @@ async function fetchOnePostDTO(id, viewerId) {
 // ---------------- App ----------------
 const app = express();
 const compression = require('compression');
-app.use(compression()); // gzip all responses (~70% size reduction on HTML/JSON/JS/CSS)
+// gzip all responses EXCEPT the SSE stream (compression buffers and would
+// delay/break real-time events behind proxies like Cloudflare).
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path === '/api/events' || req.headers.accept === 'text/event-stream') return false;
+    return compression.filter(req, res);
+  },
+}));
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
@@ -310,10 +373,44 @@ const verifyLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many verification attempts. Please try again later.' },
 });
+const forgotLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset attempts. Please try again later.' },
+});
 
 app.get('/api/config', (req, res) => {
   res.json({ supabase_url: SUPABASE_URL || null, supabase_key: SUPABASE_KEY || null });
 });
+
+// ---------------- Realtime stream (SSE) ----------------
+app.get('/api/events', wrap(async (req, res) => {
+  const token = String(req.query.token || '');
+  const user = await resolveUserFromToken(token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable proxy buffering
+  res.flushHeaders && res.flushHeaders();
+  res.write('retry: 5000\n\n');
+  res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+
+  sseAdd(user.id, res);
+
+  // Heartbeat keeps the connection alive through proxies/load balancers.
+  const hb = setInterval(() => {
+    try { res.write(`: ping\n\n`); } catch (e) { /* ignore */ }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(hb);
+    sseRemove(user.id, res);
+  });
+}));
 
 function appBaseUrl(req) {
   return process.env.APP_URL
@@ -401,6 +498,78 @@ app.post('/api/auth/resend-verification', verifyLimiter, wrap(async (req, res) =
   const out = { ok: true };
   if (!mailer.configured()) out.dev_verify_link = link;
   res.json(out);
+}));
+
+// --- Forgot password (OTP) ---
+// Step 1: request a code. Always 200 (don't leak which emails exist).
+app.post('/api/auth/forgot-password/request', forgotLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase().trim();
+  if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  const user = await findUserByEmail(em);
+  // Only send if a password-based account exists. OAuth-only accounts have no password to reset.
+  if (user && user.password_hash) {
+    const otp = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+    const otpHash = bcrypt.hashSync(otp, 10);
+    const expires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    // Invalidate previous unused codes for this email.
+    await q(`UPDATE password_reset_otps SET used = 1 WHERE email = $1 AND used = 0`, [em]);
+    await q(
+      `INSERT INTO password_reset_otps (email, otp_hash, expires_at, used, created_at)
+       VALUES ($1,$2,$3,0,$4)`,
+      [em, otpHash, expires, Date.now()]
+    );
+    const tpl = mailer.resetOtpTemplate({ name: user.name, otp });
+    const result = await mailer.sendMail({ to: em, subject: tpl.subject, html: tpl.html, text: tpl.text });
+    const out = { ok: true };
+    if (!mailer.configured()) out.dev_otp = otp; // dev fallback when no mailer configured
+    return res.json(out);
+  }
+  // No account (or OAuth-only): respond OK without sending to avoid account enumeration.
+  res.json({ ok: true });
+}));
+
+// Internal: validate the latest OTP for an email. Returns the row id if valid.
+async function validateResetOtp(email, otp) {
+  const r = await q(
+    `SELECT id, otp_hash, expires_at, used FROM password_reset_otps
+      WHERE email = $1 ORDER BY created_at DESC LIMIT 1`,
+    [email]
+  );
+  if (r.rowCount === 0) return { ok: false, error: 'No reset code found. Please request a new one.' };
+  const row = r.rows[0];
+  if (row.used === 1) return { ok: false, error: 'This code has already been used. Please request a new one.' };
+  if (Number(row.expires_at) < Date.now()) return { ok: false, error: 'This code has expired. Please request a new one.' };
+  if (!bcrypt.compareSync(String(otp || ''), row.otp_hash)) return { ok: false, error: 'Incorrect code. Please try again.' };
+  return { ok: true, id: row.id };
+}
+
+// Step 2: verify the code (does NOT consume it yet — final reset consumes it).
+app.post('/api/auth/forgot-password/verify', forgotLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase().trim();
+  const otp = String((req.body && req.body.otp) || '').trim();
+  if (!em || !otp) return res.status(400).json({ error: 'Email and code are required.' });
+  const v = await validateResetOtp(em, otp);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  res.json({ ok: true });
+}));
+
+// Step 3: reset the password (consumes the code, one-time use).
+app.post('/api/auth/forgot-password/reset', forgotLimiter, wrap(async (req, res) => {
+  const em = String((req.body && req.body.email) || '').toLowerCase().trim();
+  const otp = String((req.body && req.body.otp) || '').trim();
+  const newPassword = String((req.body && req.body.password) || '');
+  if (!em || !otp || !newPassword) return res.status(400).json({ error: 'Email, code and new password are required.' });
+  if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  const v = await validateResetOtp(em, otp);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const user = await findUserByEmail(em);
+  if (!user) return res.status(400).json({ error: 'Account not found.' });
+  // Mark code used (one-time) and update the password hash.
+  await q(`UPDATE password_reset_otps SET used = 1 WHERE id = $1`, [v.id]);
+  await q(`UPDATE users SET password_hash = $1 WHERE id = $2`, [bcrypt.hashSync(newPassword, 10), user.id]);
+  res.json({ ok: true });
 }));
 
 app.get('/api/me', authRequired, wrap(async (req, res) => {
@@ -743,6 +912,158 @@ app.get('/api/connections/requests', authRequired, wrap(async (req, res) => {
   res.json({ requests: out });
 }));
 
+// --- Calls (WebRTC signaling + logs) ---
+async function areConnected(a, b) {
+  const r = await q(
+    `SELECT 1 FROM connections
+      WHERE ((user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1)) AND accepted = 1
+      LIMIT 1`,
+    [Number(a), Number(b)]
+  );
+  return r.rowCount > 0;
+}
+
+async function callDTO(row, viewerId) {
+  const caller = await publicUser(await findUser(Number(row.caller_id)), viewerId);
+  const receiver = await publicUser(await findUser(Number(row.receiver_id)), viewerId);
+  return {
+    id: Number(row.id),
+    caller_id: Number(row.caller_id),
+    receiver_id: Number(row.receiver_id),
+    call_type: row.call_type,
+    status: row.status,
+    started_at: row.started_at ? Number(row.started_at) : null,
+    ended_at: row.ended_at ? Number(row.ended_at) : null,
+    duration_seconds: row.duration_seconds != null ? Number(row.duration_seconds) : null,
+    created_at: Number(row.created_at),
+    caller, receiver,
+  };
+}
+
+async function getCallParticipant(callId, userId) {
+  const r = await q(`SELECT * FROM calls WHERE id = $1 LIMIT 1`, [Number(callId)]);
+  if (r.rowCount === 0) return { error: 'Call not found', code: 404 };
+  const call = r.rows[0];
+  if (Number(call.caller_id) !== Number(userId) && Number(call.receiver_id) !== Number(userId)) {
+    return { error: 'Forbidden', code: 403 };
+  }
+  return { call };
+}
+
+// Start a call (caller). Only allowed between accepted connections.
+app.post('/api/calls', authRequired, wrap(async (req, res) => {
+  const receiverId = Number((req.body && req.body.receiver_id));
+  const callType = String((req.body && req.body.call_type) || 'audio');
+  if (!receiverId || receiverId === req.user.id) return res.status(400).json({ error: 'Invalid receiver' });
+  if (!['audio', 'video'].includes(callType)) return res.status(400).json({ error: 'Invalid call type' });
+  const u = await findUser(receiverId);
+  if (!u) return res.status(404).json({ error: 'User not found' });
+  if (!(await areConnected(req.user.id, receiverId))) {
+    return res.status(403).json({ error: 'You can only call connected users.' });
+  }
+  const ins = await q(
+    `INSERT INTO calls (caller_id, receiver_id, call_type, status, created_at)
+     VALUES ($1,$2,$3,'ringing',$4) RETURNING *`,
+    [req.user.id, receiverId, callType, Date.now()]
+  );
+  const dto = await callDTO(ins.rows[0], receiverId);
+  sseSend(receiverId, 'call_invite', { call: dto });
+  res.json({ call: await callDTO(ins.rows[0], req.user.id) });
+}));
+
+// Receiver accepts.
+app.post('/api/calls/:id/accept', authRequired, wrap(async (req, res) => {
+  const { call, error, code } = await getCallParticipant(req.params.id, req.user.id);
+  if (error) return res.status(code).json({ error });
+  if (Number(call.receiver_id) !== req.user.id) return res.status(403).json({ error: 'Only the receiver can accept' });
+  if (call.status !== 'ringing') return res.status(409).json({ error: 'Call no longer ringing' });
+  const upd = await q(
+    `UPDATE calls SET status='accepted', started_at=$1 WHERE id=$2 RETURNING *`,
+    [Date.now(), call.id]
+  );
+  const dto = await callDTO(upd.rows[0], req.user.id);
+  sseSend(Number(call.caller_id), 'call_accept', { call: dto });
+  res.json({ call: dto });
+}));
+
+// Receiver rejects.
+app.post('/api/calls/:id/reject', authRequired, wrap(async (req, res) => {
+  const { call, error, code } = await getCallParticipant(req.params.id, req.user.id);
+  if (error) return res.status(code).json({ error });
+  if (call.status !== 'ringing') return res.json({ ok: true });
+  const upd = await q(`UPDATE calls SET status='rejected', ended_at=$1 WHERE id=$2 RETURNING *`, [Date.now(), call.id]);
+  sseSend(Number(call.caller_id), 'call_reject', { call: await callDTO(upd.rows[0], Number(call.caller_id)) });
+  res.json({ ok: true });
+}));
+
+// Caller cancels before it's answered → logged as missed.
+app.post('/api/calls/:id/cancel', authRequired, wrap(async (req, res) => {
+  const { call, error, code } = await getCallParticipant(req.params.id, req.user.id);
+  if (error) return res.status(code).json({ error });
+  if (call.status !== 'ringing') return res.json({ ok: true });
+  const upd = await q(`UPDATE calls SET status='missed', ended_at=$1 WHERE id=$2 RETURNING *`, [Date.now(), call.id]);
+  sseSend(Number(call.receiver_id), 'call_cancel', { call: await callDTO(upd.rows[0], Number(call.receiver_id)) });
+  res.json({ ok: true });
+}));
+
+// Either party ends an active/ringing call.
+app.post('/api/calls/:id/end', authRequired, wrap(async (req, res) => {
+  const { call, error, code } = await getCallParticipant(req.params.id, req.user.id);
+  if (error) return res.status(code).json({ error });
+  if (['ended', 'rejected', 'missed'].includes(call.status)) {
+    return res.json({ call: await callDTO(call, req.user.id) });
+  }
+  const now = Date.now();
+  let status = 'ended';
+  let duration = null;
+  if (call.status === 'accepted' && call.started_at) {
+    duration = Math.max(0, Math.round((now - Number(call.started_at)) / 1000));
+  } else {
+    status = 'missed'; // ended while still ringing
+  }
+  const upd = await q(
+    `UPDATE calls SET status=$1, ended_at=$2, duration_seconds=$3 WHERE id=$4 RETURNING *`,
+    [status, now, duration, call.id]
+  );
+  const other = Number(call.caller_id) === req.user.id ? Number(call.receiver_id) : Number(call.caller_id);
+  sseSend(other, 'call_end', { call: await callDTO(upd.rows[0], other) });
+  res.json({ call: await callDTO(upd.rows[0], req.user.id) });
+}));
+
+// Relay a WebRTC signaling message to the other participant.
+app.post('/api/calls/:id/signal', authRequired, wrap(async (req, res) => {
+  const { call, error, code } = await getCallParticipant(req.params.id, req.user.id);
+  if (error) return res.status(code).json({ error });
+  const type = String((req.body && req.body.type) || '');
+  const payload = (req.body && req.body.payload) || {};
+  const allowed = ['webrtc_offer', 'webrtc_answer', 'ice_candidate', 'screen_share_started', 'screen_share_stopped'];
+  if (!allowed.includes(type)) return res.status(400).json({ error: 'Invalid signal type' });
+  const other = Number(call.caller_id) === req.user.id ? Number(call.receiver_id) : Number(call.caller_id);
+  await q(
+    `INSERT INTO call_signals (call_id, sender_id, receiver_id, type, payload, created_at)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6)`,
+    [call.id, req.user.id, other, type, JSON.stringify(payload), Date.now()]
+  );
+  sseSend(other, 'call_signal', { call_id: Number(call.id), type, payload, sender_id: req.user.id });
+  res.json({ ok: true });
+}));
+
+// Call history with a specific user (last 30 days).
+app.get('/api/calls/logs/:userId', authRequired, wrap(async (req, res) => {
+  const other = Number(req.params.userId);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const r = await q(
+    `SELECT * FROM calls
+      WHERE created_at >= $3
+        AND ((caller_id=$1 AND receiver_id=$2) OR (caller_id=$2 AND receiver_id=$1))
+      ORDER BY created_at DESC LIMIT 50`,
+    [req.user.id, other, cutoff]
+  );
+  const logs = [];
+  for (const row of r.rows) logs.push(await callDTO(row, req.user.id));
+  res.json({ logs });
+}));
+
 // --- Messaging ---
 app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
   const r = await q(
@@ -810,10 +1131,16 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   );
   await notify(other, 'message', req.user.id, { message_id: Number(ins.rows[0].id) });
   const m = ins.rows[0];
-  res.json({ message: {
+  const dto = {
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
-    content: m.content, created_at: Number(m.created_at), read: m.read,
-  }});
+    content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
+    created_at: Number(m.created_at), read: m.read,
+  };
+  // Realtime fan-out: deliver to the receiver and the sender's other tabs/devices.
+  const sender = await publicUser(await findUser(req.user.id), other);
+  sseSend(other, 'message', { message: dto, peer: sender });
+  sseSend(req.user.id, 'message', { message: dto, peer: await publicUser(u, req.user.id) });
+  res.json({ message: dto });
 }));
 
 // --- Notifications ---
@@ -1096,4 +1423,14 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
   app.listen(PORT, () => {
     console.log(`🚀 Pronet server (Postgres) running at http://localhost:${PORT}`);
   });
+
+  // Retention cleanup: drop stale call signals (>1 day) and old call logs (>30 days).
+  async function cleanupCalls() {
+    try {
+      await q(`DELETE FROM call_signals WHERE created_at < $1`, [Date.now() - 24 * 60 * 60 * 1000]);
+      await q(`DELETE FROM calls WHERE created_at < $1`, [Date.now() - 30 * 24 * 60 * 60 * 1000]);
+    } catch (e) { /* table may not exist yet before migration */ }
+  }
+  cleanupCalls();
+  setInterval(cleanupCalls, 6 * 60 * 60 * 1000); // every 6 hours
 })();
