@@ -110,7 +110,7 @@ function initials(name) {
 const RT = (() => {
   let es = null;
   let started = false;
-  const handlers = { message: new Set(), notification: new Set(), call: new Set(), ready: new Set() };
+  const handlers = { message: new Set(), notification: new Set(), call: new Set(), presence: new Set(), ready: new Set() };
 
   function emit(type, data) {
     const set = handlers[type];
@@ -127,6 +127,7 @@ const RT = (() => {
     es.addEventListener('ready', (e) => emit('ready', safeParse(e.data)));
     es.addEventListener('message', (e) => emit('message', safeParse(e.data)));
     es.addEventListener('notification', (e) => emit('notification', safeParse(e.data)));
+    es.addEventListener('presence', (e) => emit('presence', safeParse(e.data)));
     // All call signaling events funnel through a single 'call' handler.
     ['call_invite','call_accept','call_reject','call_end','call_signal','call_cancel'].forEach(ev => {
       es.addEventListener(ev, (e) => emit('call', { event: ev, data: safeParse(e.data) }));
@@ -160,6 +161,50 @@ const RT = (() => {
 })();
 window.RT = RT;
 
+// ===== Online presence =====
+// Live set of online user ids, seeded from /api/presence and kept current via
+// the SSE 'presence' event. Drives the green dot on avatars app-wide.
+const Presence = (() => {
+  const online = new Set();
+  let seeded = false;
+
+  function refreshDom(id) {
+    const sel = id != null ? `.avatar[data-uid="${id}"]` : '.avatar[data-uid]';
+    document.querySelectorAll(sel).forEach(el => {
+      const uid = Number(el.getAttribute('data-uid'));
+      el.classList.toggle('is-online', online.has(uid));
+    });
+  }
+
+  async function seed() {
+    try {
+      const r = await api('/api/presence');
+      online.clear();
+      (r.online || []).forEach(id => online.add(Number(id)));
+      seeded = true;
+      refreshDom();
+    } catch (e) { /* not fatal; transitions still update the set */ }
+  }
+
+  function isOnline(id) { return id != null && online.has(Number(id)); }
+
+  function start() {
+    if (!Session.isAuthed()) return;
+    RT.on('presence', (d) => {
+      if (!d || d.user_id == null) return;
+      const id = Number(d.user_id);
+      if (d.online) online.add(id); else online.delete(id);
+      refreshDom(id);
+    });
+    // Re-seed on (re)connect so a dropped stream can't leave us stale.
+    RT.on('ready', () => seed());
+    seed();
+  }
+
+  return { start, seed, isOnline, refreshDom, _set: online, get seeded() { return seeded; } };
+})();
+window.Presence = Presence;
+
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return s + 's';
@@ -175,10 +220,14 @@ function escapeHTML(s) {
 
 function avatar(u, size = 'sm') {
   if (!u) return '';
+  const id = u.id != null ? Number(u.id) : null;
+  const uidAttr = id != null ? ` data-uid="${id}"` : '';
+  const onlineCls = (id != null && window.Presence && Presence.isOnline(id)) ? ' is-online' : '';
+  const dot = id != null ? '<span class="presence-dot" aria-hidden="true"></span>' : '';
   if (u.avatar_url) {
-    return `<span class="avatar img ${size}"><img src="${escapeHTML(u.avatar_url)}" alt=""/></span>`;
+    return `<span class="avatar img ${size}${onlineCls}"${uidAttr}><img src="${escapeHTML(u.avatar_url)}" alt=""/>${dot}</span>`;
   }
-  return `<div class="avatar ${size}" style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}</div>`;
+  return `<div class="avatar ${size}${onlineCls}"${uidAttr} style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}${dot}</div>`;
 }
 
 function getMe() { try { return JSON.parse(sessionStorage.getItem('user') || 'null'); } catch { return null; } }
@@ -304,6 +353,8 @@ async function renderNav(activeTab) {
 
     // Start the realtime stream once per tab.
     RT.start();
+    // Seed + subscribe online presence (green dots) on the same stream.
+    Presence.start();
 
     // Live badge bumps from realtime events (instant, no refresh).
     RT.on('notification', () => {

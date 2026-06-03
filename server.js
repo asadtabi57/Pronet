@@ -317,6 +317,26 @@ function sseSend(userId, event, data) {
   }
 }
 
+// ---------------- Online presence ----------------
+// A user is "online" while they hold at least one live SSE connection. We
+// broadcast online/offline transitions to every connected client so each
+// browser can keep a live set of online user ids (drives the green dot).
+function onlineUserIds() {
+  return [...sseClients.keys()];
+}
+function isUserOnline(userId) {
+  const set = sseClients.get(Number(userId));
+  return !!(set && set.size > 0);
+}
+function broadcastPresence(userId, online) {
+  const payload = `event: presence\ndata: ${JSON.stringify({ user_id: Number(userId), online })}\n\n`;
+  for (const set of sseClients.values()) {
+    for (const res of set) {
+      try { res.write(payload); } catch (e) { /* cleaned on close */ }
+    }
+  }
+}
+
 // Resolve a user id from a raw token (JWT first, then Supabase). For SSE the
 // token arrives as a query param because EventSource can't set headers.
 async function resolveUserFromToken(token) {
@@ -608,7 +628,10 @@ app.get('/api/events', wrap(async (req, res) => {
   res.write('retry: 5000\n\n');
   res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
 
+  // Detect the offline -> online transition (first connection for this user).
+  const wasOnline = isUserOnline(user.id);
   sseAdd(user.id, res);
+  if (!wasOnline) broadcastPresence(user.id, true);
 
   // Heartbeat keeps the connection alive through proxies/load balancers.
   const hb = setInterval(() => {
@@ -618,7 +641,15 @@ app.get('/api/events', wrap(async (req, res) => {
   req.on('close', () => {
     clearInterval(hb);
     sseRemove(user.id, res);
+    // Last connection closed -> the user just went offline.
+    if (!isUserOnline(user.id)) broadcastPresence(user.id, false);
   });
+}));
+
+// Snapshot of everyone currently online — lets a freshly loaded page seed its
+// presence set before any realtime transition arrives.
+app.get('/api/presence', authRequired, wrap(async (req, res) => {
+  res.json({ online: onlineUserIds() });
 }));
 
 function appBaseUrl(req) {

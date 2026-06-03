@@ -31,7 +31,7 @@
   };
 
   // ---------- DOM ----------
-  let elOverlay, elIncoming, ringAudio;
+  let elOverlay, elIncoming, ringAudio, vibrateTimer = null;
 
   function buildUI() {
     // In-call window
@@ -77,7 +77,8 @@
       </div>`;
     document.body.appendChild(elIncoming);
 
-    ringAudio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=');
+    ringAudio = new Audio('/ringtone.mp3');
+    ringAudio.preload = 'auto';
 
     document.getElementById('ctrl-mute').onclick = toggleMute;
     document.getElementById('ctrl-cam').onclick = toggleCamera;
@@ -99,8 +100,28 @@
   function setStatus(t) { const e = document.getElementById('call-status'); if (e) e.textContent = t; }
   function showOverlay() { elOverlay.classList.add('open'); }
   function hideOverlay() { elOverlay.classList.remove('open'); }
-  function showIncoming() { elIncoming.classList.add('open'); try { ringAudio.loop = true; ringAudio.play().catch(() => {}); } catch (e) {} }
-  function hideIncoming() { elIncoming.classList.remove('open'); try { ringAudio.pause(); } catch (e) {} }
+  function showIncoming() {
+    elIncoming.classList.add('open');
+    try { ringAudio.loop = true; ringAudio.currentTime = 0; ringAudio.play().catch(() => {}); } catch (e) {}
+    startVibration();
+  }
+  function hideIncoming() {
+    elIncoming.classList.remove('open');
+    try { ringAudio.pause(); ringAudio.currentTime = 0; } catch (e) {}
+    stopVibration();
+  }
+
+  // Vibration patterns don't auto-repeat, so re-fire on an interval while ringing.
+  function startVibration() {
+    if (!('vibrate' in navigator)) return;
+    stopVibration();
+    try { navigator.vibrate([500, 500, 500]); } catch (e) {}
+    vibrateTimer = setInterval(() => { try { navigator.vibrate([500, 500, 500]); } catch (e) {} }, 1600);
+  }
+  function stopVibration() {
+    if (vibrateTimer) { clearInterval(vibrateTimer); vibrateTimer = null; }
+    if ('vibrate' in navigator) { try { navigator.vibrate(0); } catch (e) {} }
+  }
 
   function startTimer() {
     state.startedAt = Date.now();

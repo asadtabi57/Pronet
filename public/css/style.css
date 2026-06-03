@@ -209,18 +209,30 @@ button:focus-visible, a:focus-visible {
 
 /* ---------- Avatar ---------- */
 .avatar {
+  position: relative;
   border-radius: 50%; color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 700; flex-shrink: 0; overflow: hidden;
+  font-weight: 700; flex-shrink: 0; overflow: visible;
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04);
 }
 .avatar.img { background: #e2e8f0; }
-.avatar.img img { width: 100%; height: 100%; object-fit: cover; }
+.avatar.img img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 .avatar.xs { width: 24px; height: 24px; font-size: 10px; }
 .avatar.sm { width: 32px; height: 32px; font-size: 13px; }
 .avatar.md { width: 48px; height: 48px; font-size: 16px; }
 .avatar.lg { width: 92px; height: 92px; font-size: 28px; border: 3px solid #fff; box-shadow: 0 0 0 1px var(--line), var(--shadow-sm); }
 .avatar.xl { width: 160px; height: 160px; font-size: 52px; border: 4px solid #fff; box-shadow: 0 0 0 1px var(--line), var(--shadow-md); }
+
+/* Online presence dot — hidden until the avatar's user is marked online. */
+.avatar .presence-dot {
+  position: absolute; bottom: 0; right: 0;
+  width: 30%; height: 30%; min-width: 8px; min-height: 8px;
+  max-width: 18px; max-height: 18px;
+  background: #22c55e; border: 2px solid #fff; border-radius: 50%;
+  box-sizing: border-box; display: none; pointer-events: none;
+}
+.avatar.is-online .presence-dot { display: block; }
+.avatar.lg .presence-dot, .avatar.xl .presence-dot { border-width: 3px; }
 
 /* ==========================================================================
    LANDING PAGE
