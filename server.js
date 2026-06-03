@@ -108,12 +108,11 @@ async function authRequired(req, res, next) {
 }
 
 // ---------------- DTO helpers ----------------
-async function publicUser(u, viewerId) {
-  if (!u) return null;
+// Pure DTO builder — given a user row, its total connection count, and the
+// viewer's connection row (or null), produce the public user object. Shared by
+// publicUser (single) and publicUsersByIds (batch) so the shape never drifts.
+function buildUserDTO(u, viewerId, connectionCount, rel) {
   const uid = Number(u.id);
-  const ccRes = await q(
-    `SELECT COUNT(*)::int AS c FROM connections WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`, [uid]
-  );
   const out = {
     id: uid, name: u.name, email: u.email, headline: u.headline || '',
     about: u.about || '', avatar_color: u.avatar_color,
@@ -122,25 +121,80 @@ async function publicUser(u, viewerId) {
     experience: u.experience || [], education: u.education || [], skills: u.skills || [],
     cover_color: u.cover_color || '#a0c4ff',
     subscription: u.subscription || null,
-    connection_count: ccRes.rows[0].c,
+    connection_count: connectionCount || 0,
   };
+  if (viewerId != null && viewerId !== uid) {
+    out.connected = false;
+    out.pending_out = false;  // I sent a request to them
+    out.pending_in  = false;  // they sent a request to me
+    if (rel) {
+      if (rel.accepted === 1) out.connected = true;
+      else if (Number(rel.user_a) === Number(viewerId)) out.pending_out = true;
+      else out.pending_in = true;
+    }
+  }
+  return out;
+}
+
+async function publicUser(u, viewerId) {
+  if (!u) return null;
+  const uid = Number(u.id);
+  const ccRes = await q(
+    `SELECT COUNT(*)::int AS c FROM connections WHERE (user_a = $1 OR user_b = $1) AND accepted = 1`, [uid]
+  );
+  let rel = null;
   if (viewerId != null && viewerId !== uid) {
     const cn = await q(
       `SELECT user_a, accepted FROM connections
         WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
       [viewerId, uid]
     );
-    out.connected = false;
-    out.pending_out = false;  // I sent a request to them
-    out.pending_in  = false;  // they sent a request to me
-    if (cn.rowCount > 0) {
-      const row = cn.rows[0];
-      if (row.accepted === 1) out.connected = true;
-      else if (Number(row.user_a) === Number(viewerId)) out.pending_out = true;
-      else out.pending_in = true;
+    rel = cn.rowCount > 0 ? cn.rows[0] : null;
+  }
+  return buildUserDTO(u, viewerId, ccRes.rows[0].c, rel);
+}
+
+// Batch version: resolve many users to public DTOs in a fixed number of queries
+// (3 total) instead of N+1. Returns a Map keyed by numeric user id. Use this
+// inside any endpoint that renders a list of users.
+async function publicUsersByIds(ids, viewerId) {
+  const uniq = [...new Set((ids || []).map(Number).filter(Boolean))];
+  const map = new Map();
+  if (!uniq.length) return map;
+
+  const usersRes = await q(`SELECT * FROM users WHERE id = ANY($1::bigint[])`, [uniq]);
+
+  // connection_count for every target in one pass
+  const ccRes = await q(
+    `SELECT t AS id, COUNT(*)::int AS c FROM (
+        SELECT user_a AS t FROM connections WHERE accepted = 1 AND user_a = ANY($1::bigint[])
+        UNION ALL
+        SELECT user_b AS t FROM connections WHERE accepted = 1 AND user_b = ANY($1::bigint[])
+     ) z GROUP BY t`,
+    [uniq]
+  );
+  const countMap = new Map(ccRes.rows.map(r => [Number(r.id), r.c]));
+
+  // viewer's relationship to each target in one query
+  const relMap = new Map();
+  if (viewerId != null) {
+    const relRes = await q(
+      `SELECT user_a, user_b, accepted FROM connections
+        WHERE (user_a = $1 AND user_b = ANY($2::bigint[]))
+           OR (user_b = $1 AND user_a = ANY($2::bigint[]))`,
+      [Number(viewerId), uniq]
+    );
+    for (const row of relRes.rows) {
+      const other = Number(row.user_a) === Number(viewerId) ? Number(row.user_b) : Number(row.user_a);
+      relMap.set(other, row);
     }
   }
-  return out;
+
+  for (const u of usersRes.rows) {
+    const uid = Number(u.id);
+    map.set(uid, buildUserDTO(u, viewerId, countMap.get(uid) || 0, relMap.get(uid) || null));
+  }
+  return map;
 }
 
 async function findUser(id) {
@@ -810,8 +864,8 @@ app.get('/api/people', authRequired, wrap(async (req, res) => {
   const r = await q(
     `SELECT * FROM users WHERE id <> $1 ORDER BY RANDOM() LIMIT 20`, [req.user.id]
   );
-  const out = [];
-  for (const u of r.rows) out.push(await publicUser(u, req.user.id));
+  const userMap = await publicUsersByIds(r.rows.map(u => u.id), req.user.id);
+  const out = r.rows.map(u => userMap.get(Number(u.id))).filter(Boolean);
   res.json({ people: out });
 }));
 
@@ -890,8 +944,8 @@ app.get('/api/connections', authRequired, wrap(async (req, res) => {
        AND c.accepted = 1`,
     [req.user.id]
   );
-  const out = [];
-  for (const u of r.rows) out.push(await publicUser(u, req.user.id));
+  const userMap = await publicUsersByIds(r.rows.map(u => u.id), req.user.id);
+  const out = r.rows.map(u => userMap.get(Number(u.id))).filter(Boolean);
   res.json({ connections: out });
 }));
 
@@ -903,9 +957,11 @@ app.get('/api/connections/requests', authRequired, wrap(async (req, res) => {
       ORDER BY c.created_at DESC`,
     [req.user.id]
   );
+  const userMap = await publicUsersByIds(r.rows.map(u => u.id), req.user.id);
   const out = [];
   for (const u of r.rows) {
-    const p = await publicUser(u, req.user.id);
+    const p = userMap.get(Number(u.id));
+    if (!p) continue;
     p.requested_at = Number(u.requested_at);
     out.push(p);
   }
@@ -923,9 +979,13 @@ async function areConnected(a, b) {
   return r.rowCount > 0;
 }
 
-async function callDTO(row, viewerId) {
-  const caller = await publicUser(await findUser(Number(row.caller_id)), viewerId);
-  const receiver = await publicUser(await findUser(Number(row.receiver_id)), viewerId);
+async function callDTO(row, viewerId, userMap) {
+  const caller = userMap
+    ? (userMap.get(Number(row.caller_id)) || null)
+    : await publicUser(await findUser(Number(row.caller_id)), viewerId);
+  const receiver = userMap
+    ? (userMap.get(Number(row.receiver_id)) || null)
+    : await publicUser(await findUser(Number(row.receiver_id)), viewerId);
   return {
     id: Number(row.id),
     caller_id: Number(row.caller_id),
@@ -1059,8 +1119,11 @@ app.get('/api/calls/logs/:userId', authRequired, wrap(async (req, res) => {
       ORDER BY created_at DESC LIMIT 50`,
     [req.user.id, other, cutoff]
   );
+  const ids = [];
+  for (const row of r.rows) { ids.push(row.caller_id, row.receiver_id); }
+  const userMap = await publicUsersByIds(ids, req.user.id);
   const logs = [];
-  for (const row of r.rows) logs.push(await callDTO(row, req.user.id));
+  for (const row of r.rows) logs.push(await callDTO(row, req.user.id, userMap));
   res.json({ logs });
 }));
 
@@ -1082,11 +1145,11 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
        ORDER BY l.created_at DESC`,
     [req.user.id]
   );
+  const userMap = await publicUsersByIds(r.rows.map(row => row.other_id), req.user.id);
   const threads = [];
   for (const row of r.rows) {
-    const u = await findUser(Number(row.other_id));
     threads.push({
-      user: await publicUser(u, req.user.id),
+      user: userMap.get(Number(row.other_id)) || null,
       last_message: {
         id: Number(row.id), from_id: Number(row.from_id), to_id: Number(row.to_id),
         content: row.content, created_at: Number(row.created_at), read: row.read,
@@ -1153,9 +1216,10 @@ app.get('/api/notifications', authRequired, wrap(async (req, res) => {
       LIMIT 100`,
     [req.user.id]
   );
+  const userMap = await publicUsersByIds(r.rows.map(n => n.actor_id), req.user.id);
   const items = [];
   for (const n of r.rows) {
-    const actor = n.actor_id ? await publicUser(await findUser(Number(n.actor_id)), req.user.id) : null;
+    const actor = n.actor_id ? (userMap.get(Number(n.actor_id)) || null) : null;
     items.push({
       id: Number(n.id), user_id: Number(n.user_id), type: n.type,
       actor_id: n.actor_id ? Number(n.actor_id) : null,
