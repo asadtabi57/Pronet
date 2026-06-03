@@ -5,6 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const DOMPurify = require('isomorphic-dompurify');
 const { Pool } = require('pg');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -25,6 +27,52 @@ const q = (text, params) => pool.query(text, params);
 // ---------------- Auth helpers ----------------
 function signToken(user) {
   return jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '30d' });
+}
+
+// ---------------- Secure session cookie (mitigates token theft via XSS) ----
+// The JWT lives in an httpOnly cookie so frontend JS can never read it. `secure`
+// is set whenever the request is HTTPS (always true behind Railway's proxy),
+// and falls back to false on localhost http so dev still works.
+const AUTH_COOKIE = 'pn_token';
+function isHttps(req) {
+  return Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+}
+function authCookieOptions(req) {
+  return {
+    httpOnly: true,
+    secure: isHttps(req),
+    sameSite: 'lax', // 'lax' keeps the cookie working through the OAuth redirect return
+    path: '/',
+  };
+}
+function setAuthCookie(req, res, token) {
+  res.cookie(AUTH_COOKIE, token, { ...authCookieOptions(req), maxAge: 30 * 24 * 60 * 60 * 1000 });
+}
+function clearAuthCookie(req, res) {
+  res.clearCookie(AUTH_COOKIE, authCookieOptions(req));
+}
+function tokenFromRequest(req) {
+  if (req.cookies && req.cookies[AUTH_COOKIE]) return req.cookies[AUTH_COOKIE];
+  const h = req.headers.authorization || '';
+  return h.startsWith('Bearer ') ? h.slice(7) : null;
+}
+
+// ---------------- Input sanitization (XSS defense-in-depth) ----------------
+// User-authored text (posts, comments, messages) is plain text on render, so we
+// strip ALL html before it ever reaches the database. KEEP_CONTENT keeps the
+// visible text of any stripped tags (e.g. "<b>hi</b>" -> "hi").
+function sanitizeText(s) {
+  if (s == null) return s;
+  const stripped = DOMPurify.sanitize(String(s), { ALLOWED_TAGS: [], ALLOWED_ATTR: [], KEEP_CONTENT: true });
+  // DOMPurify entity-encodes stray < > & " ' from plain text. Decode them back so
+  // we store true plain text — the frontend escapes again on render (escapeHTML),
+  // so this remains XSS-safe while avoiding double-encoding artifacts.
+  return stripped
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 const sbTokenCache = new Map();
@@ -87,8 +135,7 @@ async function ensureLocalUserFromSupabase(sbUser) {
 }
 
 async function authRequired(req, res, next) {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+  const token = tokenFromRequest(req);
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
@@ -387,6 +434,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser());
 
 // Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
 const BUILD_ID = Date.now().toString(36);
@@ -530,7 +578,9 @@ app.get('/api/config', (req, res) => {
 
 // ---------------- Realtime stream (SSE) ----------------
 app.get('/api/events', wrap(async (req, res) => {
-  const token = String(req.query.token || '');
+  // EventSource can't set headers, but it DOES send the httpOnly cookie on
+  // same-origin requests. Fall back to the legacy ?token= for compatibility.
+  const token = tokenFromRequest(req) || String(req.query.token || '');
   const user = await resolveUserFromToken(token);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -621,7 +671,9 @@ app.post('/api/auth/signup/verify-otp', otpVerifyLimiter, wrap(async (req, res) 
   await q(`UPDATE email_otps SET used = 1 WHERE id = $1`, [v.id]);
   await q(`UPDATE users SET email_verified = TRUE, email_verify_token = NULL, email_verify_expires = NULL WHERE id = $1`, [user.id]);
   const fresh = await findUserByEmail(em);
-  res.json({ token: signToken(fresh), user: await publicUser(fresh, fresh.id) });
+  const token = signToken(fresh);
+  setAuthCookie(req, res, token);
+  res.json({ token, user: await publicUser(fresh, fresh.id) });
 }));
 
 // Signup step 2b: resend a fresh OTP (rate-limited). Never reveals account state.
@@ -646,8 +698,26 @@ app.post('/api/auth/login', loginLimiter, wrap(async (req, res) => {
   if (!user.email_verified) {
     return res.status(403).json({ error: 'Please verify your email before signing in.', needs_verification: true });
   }
-  res.json({ token: signToken(user), user: await publicUser(user, user.id) });
+  const token = signToken(user);
+  setAuthCookie(req, res, token);
+  res.json({ token, user: await publicUser(user, user.id) });
 }));
+
+// Exchange a Supabase/OAuth session for our own httpOnly JWT cookie. The client
+// sends the Supabase access token once (Bearer); authRequired bridges it to a
+// local user, then we mint our cookie so every later request is cookie-based.
+app.post('/api/auth/session', authRequired, wrap(async (req, res) => {
+  const user = await findUser(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  setAuthCookie(req, res, signToken(user));
+  res.json({ user: await publicUser(user, user.id) });
+}));
+
+// Clear the auth cookie (server-side logout).
+app.post('/api/auth/logout', (req, res) => {
+  clearAuthCookie(req, res);
+  res.json({ ok: true });
+});
 
 app.get('/api/auth/verify-email', verifyLimiter, wrap(async (req, res) => {
   const token = String(req.query.token || '');
@@ -847,7 +917,7 @@ app.post('/api/posts', authRequired, wrap(async (req, res) => {
   const ins = await q(
     `INSERT INTO posts (user_id, content, media_type, media_url, created_at)
      VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [req.user.id, (content || '').trim(), media_type || null, media_url || null, Date.now()]
+    [req.user.id, sanitizeText((content || '').trim()), media_type || null, media_url || null, Date.now()]
   );
   const postId = Number(ins.rows[0].id);
   const post = await fetchOnePostDTO(postId, req.user.id);
@@ -943,7 +1013,7 @@ app.post('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
   const ins = await q(
     `INSERT INTO comments (user_id, post_id, content, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [req.user.id, postId, content.trim(), Date.now()]
+    [req.user.id, postId, sanitizeText(content.trim()), Date.now()]
   );
   await notify(Number(postR.rows[0].user_id), 'comment', req.user.id,
     { post_id: postId, comment_id: Number(ins.rows[0].id) });
@@ -956,7 +1026,7 @@ app.post('/api/posts/:id/repost', authRequired, wrap(async (req, res) => {
   if (origR.rowCount === 0) return res.status(404).json({ error: 'Not found' });
   const ins = await q(
     `INSERT INTO posts (user_id, content, repost_of, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [req.user.id, (req.body && req.body.content) || '', id, Date.now()]
+    [req.user.id, sanitizeText((req.body && req.body.content) || ''), id, Date.now()]
   );
   await notify(Number(origR.rows[0].user_id), 'repost', req.user.id, { post_id: id });
   const post = await fetchOnePostDTO(ins.rows[0].id, req.user.id);
@@ -979,7 +1049,7 @@ app.post('/api/posts/:id/send', authRequired, wrap(async (req, res) => {
   const postR = await q(`SELECT id, content FROM posts WHERE id = $1`, [id]);
   const recipient = await findUser(Number(to_user_id));
   if (postR.rowCount === 0 || !recipient) return res.status(404).json({ error: 'Not found' });
-  const text = `${note ? note + '\n\n' : ''}[Shared post #${id}] ${postR.rows[0].content || ''}`.trim();
+  const text = `${note ? sanitizeText(note) + '\n\n' : ''}[Shared post #${id}] ${postR.rows[0].content || ''}`.trim();
   const ins = await q(
     `INSERT INTO messages (from_id, to_id, content, attached_post_id, created_at, read)
      VALUES ($1,$2,$3,$4,$5,0) RETURNING id`,
@@ -1320,7 +1390,7 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const ins = await q(
     `INSERT INTO messages (from_id, to_id, content, created_at, read)
      VALUES ($1,$2,$3,$4,0) RETURNING *`,
-    [req.user.id, other, content.trim(), Date.now()]
+    [req.user.id, other, sanitizeText(content.trim()), Date.now()]
   );
   await notify(other, 'message', req.user.id, { message_id: Number(ins.rows[0].id) });
   const m = ins.rows[0];

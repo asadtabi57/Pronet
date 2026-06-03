@@ -1,30 +1,33 @@
 // ===== Session management =====
-// - Token & profile live in sessionStorage (cleared on tab close → true browser session)
-// - 5-minute inactivity timeout: any mouse / keyboard / touch / scroll activity
-//   refreshes the timer. After 5 min idle the user is signed out automatically.
-// - A `last_activity` timestamp is shared via sessionStorage so navigating
-//   between pages doesn't reset the idle clock.
+// - The JWT now lives in a secure, httpOnly cookie set by the backend, so it is
+//   NOT readable by JS (mitigates token theft via XSS). We only keep a
+//   non-sensitive `authed` marker + idle timestamp in sessionStorage for the
+//   client-side 5-minute inactivity timeout and route gating.
+// - Any mouse / keyboard / touch / scroll activity refreshes the idle timer.
 
 const Session = (() => {
   const IDLE_MS = 5 * 60 * 1000; // 5 minutes
-  const TOKEN_KEY = 'token';
+  const AUTH_KEY = 'authed';
   const USER_KEY = 'user';
   const LAST_KEY = 'last_activity';
 
   function now() { return Date.now(); }
 
-  function setToken(t) {
-    sessionStorage.setItem(TOKEN_KEY, t);
+  function setAuthed() {
+    sessionStorage.setItem(AUTH_KEY, '1');
     sessionStorage.setItem(LAST_KEY, String(now()));
   }
-  function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
+  // Back-compat: older call sites passed a token string. We no longer store the
+  // token (it's in the httpOnly cookie); just record that we're authenticated.
+  function setToken(_t) { setAuthed(); }
+  function isAuthed() { return sessionStorage.getItem(AUTH_KEY) === '1'; }
   function clear() {
-    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(AUTH_KEY);
     sessionStorage.removeItem(USER_KEY);
     sessionStorage.removeItem(LAST_KEY);
   }
   function touch() {
-    if (sessionStorage.getItem(TOKEN_KEY)) {
+    if (isAuthed()) {
       sessionStorage.setItem(LAST_KEY, String(now()));
     }
   }
@@ -37,14 +40,14 @@ const Session = (() => {
     return last > 0 && (now() - last) > IDLE_MS;
   }
   function isValid() {
-    return !!getToken() && !isExpired();
+    return isAuthed() && !isExpired();
   }
   function msRemaining() {
     const last = lastActivity();
     if (!last) return IDLE_MS;
     return Math.max(0, IDLE_MS - (now() - last));
   }
-  return { setToken, getToken, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
+  return { setAuthed, setToken, isAuthed, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
 })();
 
 // ===== Shared API + helpers =====
@@ -52,19 +55,13 @@ async function api(path, { method = 'GET', body } = {}) {
   // Enforce idle timeout before every request
   if (Session.isExpired()) { await signOut('Session expired due to inactivity.'); throw new Error('Session expired'); }
 
-  const headers = { 'Content-Type': 'application/json' };
-  let token = Session.getToken();
-  if (window.sb) {
-    try {
-      const { data } = await window.sb.auth.getSession();
-      if (data && data.session && data.session.access_token) {
-        token = data.session.access_token;
-        Session.setToken(token);
-      }
-    } catch (e) {}
-  }
-  if (token) headers.Authorization = 'Bearer ' + token;
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  // Auth travels in the httpOnly cookie — `credentials: 'include'` sends it.
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'include',
+  });
   let data = {};
   try { data = await res.json(); } catch (e) {}
   if (res.status === 401) { await signOut(); throw new Error('Unauthorized'); }
@@ -73,7 +70,24 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// Exchange a Supabase/OAuth access token for our own httpOnly cookie session.
+// Called once right after a Google/legacy Supabase login.
+async function exchangeSupabaseSession(accessToken) {
+  const res = await fetch('/api/auth/session', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Authorization': 'Bearer ' + accessToken },
+  });
+  if (!res.ok) throw new Error('Session exchange failed');
+  const data = await res.json();
+  if (data && data.user) setMe(data.user);
+  Session.setAuthed();
+  return data;
+}
+window.exchangeSupabaseSession = exchangeSupabaseSession;
+
 async function signOut(reason) {
+  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) {}
   try { if (window.sb) await window.sb.auth.signOut(); } catch (e) {}
   Session.clear();
   // Some legacy code may have written to localStorage — wipe those keys too.
@@ -105,10 +119,10 @@ const RT = (() => {
   }
 
   function connect() {
-    const token = Session.getToken();
-    if (!token) return;
+    if (!Session.isAuthed()) return;
     try { if (es) es.close(); } catch (e) {}
-    es = new EventSource('/api/events?token=' + encodeURIComponent(token));
+    // The httpOnly auth cookie is sent automatically on this same-origin request.
+    es = new EventSource('/api/events');
 
     es.addEventListener('ready', (e) => emit('ready', safeParse(e.data)));
     es.addEventListener('message', (e) => emit('message', safeParse(e.data)));
@@ -171,7 +185,7 @@ function getMe() { try { return JSON.parse(sessionStorage.getItem('user') || 'nu
 function setMe(u) { sessionStorage.setItem('user', JSON.stringify(u)); Session.touch(); }
 function requireAuth() {
   if (!Session.isValid()) {
-    signOut(Session.getToken() ? 'Session expired due to inactivity.' : null);
+    signOut(Session.isAuthed() ? 'Session expired due to inactivity.' : null);
     return false;
   }
   return true;
@@ -200,7 +214,7 @@ function requireAuth() {
 
   // Periodic check (every 15s) so an idle tab still gets signed out.
   setInterval(() => {
-    if (Session.getToken() && Session.isExpired()) {
+    if (Session.isAuthed() && Session.isExpired()) {
       signOut('Session expired due to inactivity.');
     }
   }, 15_000);

@@ -181,10 +181,9 @@
         if (window.sb) {
           const { data: sd, error } = await window.sb.auth.signInWithPassword({ email, password });
           if (!error && sd.session) {
-            Session.setToken(sd.session.access_token);
             try {
-              const me = await api('/api/me');
-              setMe(me.user);
+              // Trade the Supabase token for our own httpOnly cookie session.
+              await exchangeSupabaseSession(sd.session.access_token);
               location.href = '/feed.html';
               return;
             } catch (e2) { Session.clear(); }

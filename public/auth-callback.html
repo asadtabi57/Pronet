@@ -24,6 +24,7 @@
         await new Promise(r => setTimeout(r, 300));
         const { data, error } = await window.sb.auth.getSession();
         if (error) throw error;
+        let accessToken;
         if (!data.session) {
           // Allow auth state change to fire (some flows are async)
           await new Promise(resolve => {
@@ -32,13 +33,13 @@
           });
           const r2 = await window.sb.auth.getSession();
           if (!r2.data.session) throw new Error('No session returned.');
-          Session.setToken(r2.data.session.access_token);
+          accessToken = r2.data.session.access_token;
         } else {
-          Session.setToken(data.session.access_token);
+          accessToken = data.session.access_token;
         }
         msg.textContent = 'Loading your profile…';
-        const me = await api('/api/me');
-        setMe(me.user);
+        // Trade the Supabase OAuth token for our own httpOnly cookie session.
+        await exchangeSupabaseSession(accessToken);
         location.href = '/feed.html';
       } catch (ex) {
         err.textContent = ex.message + ' — redirecting…';
