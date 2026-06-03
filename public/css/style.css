@@ -978,6 +978,27 @@ body.app {
   display: flex; justify-content: flex-end; gap: 8px;
 }
 
+/* On-theme confirm popup (replaces native confirm) — white card, blue action */
+.confirm-dialog {
+  background: #fff; border-radius: var(--r-xl);
+  width: 90%; max-width: 360px; text-align: center;
+  box-shadow: var(--shadow-pop);
+  animation: mdIn .2s cubic-bezier(.2, .9, .3, 1.05);
+}
+.confirm-body { padding: 28px 24px 6px; }
+.confirm-title { margin: 0 0 8px; font-size: var(--fs-18); font-weight: 700; color: var(--ink); }
+.confirm-msg { margin: 0; font-size: var(--fs-14); line-height: 1.5; color: var(--muted); }
+.confirm-foot { padding: 20px 24px 24px; display: flex; gap: 10px; justify-content: center; }
+.confirm-foot button {
+  min-width: 108px; padding: 9px 18px; border-radius: 999px;
+  font-size: var(--fs-14); font-weight: 600; cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.confirm-cancel { background: #fff; border: 1px solid var(--line); color: var(--ink); }
+.confirm-cancel:hover { background: var(--hover); }
+.confirm-ok { background: var(--brand); border: 1px solid var(--brand); color: #fff; }
+.confirm-ok:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
+
 /* ==========================================================================
    MISC
    ========================================================================== */

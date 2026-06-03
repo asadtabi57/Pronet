@@ -30,7 +30,7 @@
     `)).join('')}</div>`;
     el.querySelectorAll('.person-card').forEach(node => {
       node.querySelector('.remove-btn').onclick = async () => {
-        if (!confirm('Remove this connection?')) return;
+        if (!(await confirmDialog({ title: 'Remove connection?', message: 'They will be removed from your connections.', confirmText: 'Remove' }))) return;
         await api(`/api/people/${node.dataset.id}/disconnect`, { method: 'POST' });
         loadConnections(); loadSuggestions();
       };

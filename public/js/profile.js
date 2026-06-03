@@ -88,7 +88,7 @@
   if (!isMe) {
     document.getElementById('connect-btn').onclick = async (ev) => {
       if (data.connected) {
-        if (!confirm('Remove connection?')) return;
+        if (!(await confirmDialog({ title: 'Remove connection?', message: 'They will be removed from your connections.', confirmText: 'Remove' }))) return;
         await api(`/api/people/${data.id}/disconnect`, { method: 'POST' });
         data.connected = false; data.pending_out = false; data.pending_in = false;
       } else if (data.pending_in) {

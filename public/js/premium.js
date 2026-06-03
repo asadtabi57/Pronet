@@ -21,7 +21,7 @@
           <button class="btn-tiny ghost" id="cancel-sub">Cancel subscription</button>
         </div>`;
       document.getElementById('cancel-sub').onclick = async () => {
-        if (!confirm('Cancel your subscription?')) return;
+        if (!(await confirmDialog({ title: 'Cancel subscription?', message: 'Your premium benefits will end at the next billing date.', confirmText: 'Cancel subscription', cancelText: 'Keep' }))) return;
         await api('/api/subscriptions/cancel', { method: 'POST' });
         toast('Subscription cancelled'); refresh();
       };

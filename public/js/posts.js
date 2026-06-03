@@ -181,7 +181,7 @@ function wirePost(el, p, opts = {}) {
   const me = getMe();
   if (me && p.user_id === me.id) {
     more.onclick = async () => {
-      if (!confirm('Delete this post?')) return;
+      if (!(await confirmDialog({ title: 'Delete post?', message: 'This post will be permanently removed.', confirmText: 'Delete' }))) return;
       await api(`/api/posts/${id}`, { method: 'DELETE' });
       if (opts.onChange) opts.onChange();
     };
@@ -279,7 +279,7 @@ function wireComment(node, el, postId) {
   };
   if (delLink) delLink.onclick = async (e) => {
     e.preventDefault();
-    if (!confirm('Delete this comment?')) return;
+    if (!(await confirmDialog({ title: 'Delete comment?', message: 'This comment will be permanently removed.', confirmText: 'Delete' }))) return;
     try {
       await api(`/api/comments/${cid}`, { method: 'DELETE' });
       node.remove();

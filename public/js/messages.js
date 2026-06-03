@@ -192,7 +192,7 @@
     const mid = item.dataset.mid;
 
     if (delA) {
-      if (!confirm('Delete this message?')) return;
+      if (!(await confirmDialog({ title: 'Delete message?', message: 'This message will be removed from the chat.', confirmText: 'Delete' }))) return;
       try { await api(`/api/messages/${mid}`, { method: 'DELETE' }); removeBubble(mid); loadThreads(); }
       catch (ex) { toast(ex.message || 'Could not delete message.'); }
       return;

@@ -534,6 +534,44 @@ function openModal({ title, body, footer }) {
   return { el: wrap, close };
 }
 
+// ===== Confirm dialog (replaces native confirm() with an on-theme popup) =====
+// Returns a Promise<boolean>. White card, centered, blue action button to match
+// the messaging theme.
+function confirmDialog(opts = {}) {
+  const {
+    title = 'Are you sure?',
+    message = '',
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+  } = (typeof opts === 'string' ? { title: opts } : opts);
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-backdrop confirm-backdrop';
+    wrap.innerHTML = `
+      <div class="confirm-dialog" role="dialog" aria-modal="true">
+        <div class="confirm-body">
+          <h3 class="confirm-title">${escapeHTML(title)}</h3>
+          ${message ? `<p class="confirm-msg">${escapeHTML(message)}</p>` : ''}
+        </div>
+        <div class="confirm-foot">
+          <button type="button" class="confirm-cancel">${escapeHTML(cancelText)}</button>
+          <button type="button" class="confirm-ok">${escapeHTML(confirmText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const done = (val) => { document.removeEventListener('keydown', onKey); wrap.remove(); resolve(val); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') done(false);
+      else if (e.key === 'Enter') done(true);
+    };
+    document.addEventListener('keydown', onKey);
+    wrap.querySelector('.confirm-cancel').onclick = () => done(false);
+    wrap.querySelector('.confirm-ok').onclick = () => done(true);
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) done(false); });
+    wrap.querySelector('.confirm-ok').focus();
+  });
+}
+
 function toast(msg) {
   const el = document.createElement('div');
   el.textContent = msg;
