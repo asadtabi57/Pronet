@@ -4,7 +4,7 @@ const path = require('path');
 const { Client } = require('pg');
 
 (async () => {
-  const files = ['schema-password-reset.sql', 'schema-calls.sql', 'schema-email-otp.sql'];
+  const files = ['schema-password-reset.sql', 'schema-calls.sql', 'schema-email-otp.sql', 'schema-edit-flags.sql'];
   const c = new Client({ connectionString: process.env.DATABASE_URL });
   await c.connect();
   try {

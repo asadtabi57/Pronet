@@ -34,6 +34,9 @@ function signToken(user) {
 // is set whenever the request is HTTPS (always true behind Railway's proxy),
 // and falls back to false on localhost http so dev still works.
 const AUTH_COOKIE = 'pn_token';
+// Time windows for editing/deleting user-authored comments & messages.
+const EDIT_WINDOW_MS = 2 * 60 * 1000;   // editable for 2 minutes after posting
+const DELETE_WINDOW_MS = 5 * 60 * 1000; // deletable for 5 minutes after posting
 function isHttps(req) {
   return Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
 }
@@ -998,8 +1001,8 @@ app.post('/api/posts/:id/like', authRequired, wrap(async (req, res) => {
 app.get('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   const postId = Number(req.params.id);
   const r = await q(
-    `SELECT c.id, c.content, c.created_at, c.user_id,
-            u.name, u.avatar_color, u.headline
+    `SELECT c.id, c.content, c.created_at, c.user_id, c.edited,
+            u.name, u.avatar_color, u.avatar_url, u.headline
        FROM comments c JOIN users u ON u.id = c.user_id
       WHERE c.post_id = $1
       ORDER BY c.created_at ASC`,
@@ -1007,7 +1010,8 @@ app.get('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   );
   res.json({ comments: r.rows.map(x => ({
     id: Number(x.id), content: x.content, created_at: Number(x.created_at),
-    user_id: Number(x.user_id), name: x.name, avatar_color: x.avatar_color, headline: x.headline,
+    user_id: Number(x.user_id), name: x.name, avatar_color: x.avatar_color,
+    avatar_url: x.avatar_url || null, headline: x.headline, edited: x.edited ? 1 : 0,
   })) });
 }));
 
@@ -1024,6 +1028,36 @@ app.post('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   await notify(Number(postR.rows[0].user_id), 'comment', req.user.id,
     { post_id: postId, comment_id: Number(ins.rows[0].id) });
   res.json({ id: Number(ins.rows[0].id) });
+}));
+
+// Edit a comment — author only, within EDIT_WINDOW_MS (2 minutes).
+app.put('/api/comments/:id', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const { content } = req.body || {};
+  if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
+  const r = await q(`SELECT user_id, created_at FROM comments WHERE id = $1`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  if (Number(r.rows[0].user_id) !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (Date.now() - Number(r.rows[0].created_at) > EDIT_WINDOW_MS) {
+    return res.status(403).json({ error: 'The 2-minute edit window has passed.' });
+  }
+  const clean = sanitizeText(content.trim()).trim();
+  if (!clean) return res.status(400).json({ error: 'Content required' });
+  await q(`UPDATE comments SET content = $1, edited = 1 WHERE id = $2`, [clean, id]);
+  res.json({ ok: true, content: clean, edited: 1 });
+}));
+
+// Delete a comment — author only, within DELETE_WINDOW_MS (5 minutes).
+app.delete('/api/comments/:id', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await q(`SELECT user_id, created_at FROM comments WHERE id = $1`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  if (Number(r.rows[0].user_id) !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (Date.now() - Number(r.rows[0].created_at) > DELETE_WINDOW_MS) {
+    return res.status(403).json({ error: 'The 5-minute delete window has passed.' });
+  }
+  await q(`DELETE FROM comments WHERE id = $1`, [id]);
+  res.json({ ok: true });
 }));
 
 app.post('/api/posts/:id/repost', authRequired, wrap(async (req, res) => {
@@ -1371,7 +1405,7 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const u = await findUser(other);
   if (!u) return res.status(404).json({ error: 'User not found' });
   const r = await q(
-    `SELECT id, from_id, to_id, content, attached_post_id, created_at, read
+    `SELECT id, from_id, to_id, content, attached_post_id, created_at, read, edited
        FROM messages
       WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
       ORDER BY created_at ASC`,
@@ -1382,7 +1416,7 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const messages = r.rows.map(m => ({
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
-    created_at: Number(m.created_at), read: m.read,
+    created_at: Number(m.created_at), read: m.read, edited: m.edited ? 1 : 0,
   }));
   res.json({ user: await publicUser(u, req.user.id), messages });
 }));
@@ -1403,13 +1437,53 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const dto = {
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
-    created_at: Number(m.created_at), read: m.read,
+    created_at: Number(m.created_at), read: m.read, edited: 0,
   };
   // Realtime fan-out: deliver to the receiver and the sender's other tabs/devices.
   const sender = await publicUser(await findUser(req.user.id), other);
-  sseSend(other, 'message', { message: dto, peer: sender });
-  sseSend(req.user.id, 'message', { message: dto, peer: await publicUser(u, req.user.id) });
+  sseSend(other, 'message', { message: dto, peer: sender, action: 'new' });
+  sseSend(req.user.id, 'message', { message: dto, peer: await publicUser(u, req.user.id), action: 'new' });
   res.json({ message: dto });
+}));
+
+// Edit a message — sender only, within EDIT_WINDOW_MS (2 minutes).
+app.put('/api/messages/:id', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const { content } = req.body || {};
+  if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
+  const r = await q(`SELECT from_id, to_id, created_at FROM messages WHERE id = $1`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const row = r.rows[0];
+  if (Number(row.from_id) !== req.user.id) return res.status(403).json({ error: 'You can only edit your own messages.' });
+  if (Date.now() - Number(row.created_at) > EDIT_WINDOW_MS) {
+    return res.status(403).json({ error: 'The 2-minute edit window has passed.' });
+  }
+  const clean = sanitizeText(content.trim()).trim();
+  if (!clean) return res.status(400).json({ error: 'Content required' });
+  await q(`UPDATE messages SET content = $1, edited = 1 WHERE id = $2`, [clean, id]);
+  const other = Number(row.to_id);
+  const payload = { message: { id, from_id: Number(row.from_id), to_id: other, content: clean, edited: 1 }, action: 'update' };
+  sseSend(other, 'message', payload);
+  sseSend(req.user.id, 'message', payload);
+  res.json({ ok: true, content: clean, edited: 1 });
+}));
+
+// Delete a message — sender only, within DELETE_WINDOW_MS (5 minutes).
+app.delete('/api/messages/:id', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const r = await q(`SELECT from_id, to_id, created_at FROM messages WHERE id = $1`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const row = r.rows[0];
+  if (Number(row.from_id) !== req.user.id) return res.status(403).json({ error: 'You can only delete your own messages.' });
+  if (Date.now() - Number(row.created_at) > DELETE_WINDOW_MS) {
+    return res.status(403).json({ error: 'The 5-minute delete window has passed.' });
+  }
+  await q(`DELETE FROM messages WHERE id = $1`, [id]);
+  const other = Number(row.to_id);
+  const payload = { message: { id, from_id: Number(row.from_id), to_id: other }, action: 'delete' };
+  sseSend(other, 'message', payload);
+  sseSend(req.user.id, 'message', payload);
+  res.json({ ok: true });
 }));
 
 // --- Notifications ---

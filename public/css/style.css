@@ -876,6 +876,28 @@ body.app {
 }
 .msg-meta.from-me { text-align: right; }
 
+/* Message rows with avatar + edit/delete affordances */
+.msg-item { display: flex; flex-direction: column; }
+.msg-row { display: flex; align-items: flex-end; gap: 8px; max-width: 78%; }
+.msg-row.from-me { margin-left: auto; flex-direction: row-reverse; }
+.msg-row.from-them { margin-right: auto; }
+.msg-row .msg-bubble { margin: 0; max-width: 100%; }
+.msg-row .avatar { flex-shrink: 0; }
+.msg-meta a, .comment-actions a, .m-edit-actions a, .comment-edit a {
+  color: var(--brand); text-decoration: none; font-weight: 600;
+}
+.msg-meta a:hover, .comment-actions a:hover, .m-edit-actions a:hover, .comment-edit a:hover { text-decoration: underline; }
+.edited-tag { color: var(--muted); font-size: var(--fs-11); }
+.comment-actions { margin-top: 4px; font-size: var(--fs-12); }
+.comment-edit { margin-top: 6px; }
+.m-edit-box { margin-top: 6px; }
+.m-edit-actions { margin-top: 4px; font-size: var(--fs-12); }
+.comment-edit .c-edit-input, .m-edit-input {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; font-size: var(--fs-13); outline: none;
+}
+
 .msg-form {
   padding: 14px 18px; border-top: 1px solid var(--line);
   display: flex; gap: 10px; background: var(--card);

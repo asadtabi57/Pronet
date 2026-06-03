@@ -195,20 +195,13 @@ async function toggleComments(el, id) {
   box.innerHTML = '<p class="empty">Loading…</p>';
   const { comments } = await api(`/api/posts/${id}/comments`);
   const me = getMe();
-  box.innerHTML = comments.map(c => `
-    <div class="comment">
-      ${avatar({ name: c.name, avatar_color: c.avatar_color, avatar_url: c.avatar_url }, 'sm')}
-      <div class="bubble">
-        <a href="/profile.html?id=${c.user_id}"><span class="name">${escapeHTML(c.name)}</span></a>
-        <div class="headline">${escapeHTML(c.headline || '')}</div>
-        ${escapeHTML(c.content)}
-      </div>
-    </div>`).join('') + `
+  box.innerHTML = comments.map(c => commentHTML(c, me)).join('') + `
     <form class="comment-form">
       ${avatar(me, 'sm')}
       <input placeholder="Add a comment…" required />
       <button class="btn btn-primary" type="submit">Send</button>
     </form>`;
+  box.querySelectorAll('.comment').forEach(node => wireComment(node, el, id));
   box.querySelector('form').onsubmit = async (ev) => {
     ev.preventDefault();
     const input = ev.target.querySelector('input');
@@ -220,6 +213,80 @@ async function toggleComments(el, id) {
     const stat = el.querySelector('.comment-stat');
     const m = stat.textContent.match(/(\d+) comments · (\d+) reposts/);
     if (m) stat.textContent = `${(+m[1])+1} comments · ${m[2]} reposts`;
+  };
+}
+
+// Comments are editable for 2 minutes and deletable for 5 minutes after posting.
+const COMMENT_EDIT_MS = 2 * 60 * 1000;
+const COMMENT_DELETE_MS = 5 * 60 * 1000;
+
+function commentHTML(c, me) {
+  const mine = me && c.user_id === me.id;
+  const age = Date.now() - c.created_at;
+  let actions = '';
+  if (mine) {
+    const canEdit = age <= COMMENT_EDIT_MS;
+    const canDel = age <= COMMENT_DELETE_MS;
+    const parts = [];
+    if (canEdit) parts.push('<a href="#" class="c-edit">Edit</a>');
+    if (canDel) parts.push('<a href="#" class="c-del">Delete</a>');
+    if (parts.length) actions = `<div class="comment-actions">${parts.join(' · ')}</div>`;
+  }
+  const edited = c.edited ? ' <span class="edited-tag">(edited)</span>' : '';
+  return `
+    <div class="comment" data-cid="${c.id}" data-created="${c.created_at}">
+      ${avatar({ name: c.name, avatar_color: c.avatar_color, avatar_url: c.avatar_url }, 'sm')}
+      <div class="bubble">
+        <a href="/profile.html?id=${c.user_id}"><span class="name">${escapeHTML(c.name)}</span></a>
+        <div class="headline">${escapeHTML(c.headline || '')}</div>
+        <span class="c-text">${escapeHTML(c.content)}</span>${edited}
+        ${actions}
+      </div>
+    </div>`;
+}
+
+function wireComment(node, el, postId) {
+  const cid = node.dataset.cid;
+  const editLink = node.querySelector('.c-edit');
+  const delLink = node.querySelector('.c-del');
+  if (editLink) editLink.onclick = (e) => {
+    e.preventDefault();
+    const textEl = node.querySelector('.c-text');
+    const current = textEl.textContent;
+    const bubble = node.querySelector('.bubble');
+    const actions = node.querySelector('.comment-actions');
+    if (actions) actions.style.display = 'none';
+    const editor = document.createElement('div');
+    editor.className = 'comment-edit';
+    editor.innerHTML = `<input class="c-edit-input" value="" /><div class="comment-actions"><a href="#" class="c-save">Save</a> · <a href="#" class="c-cancel">Cancel</a></div>`;
+    bubble.appendChild(editor);
+    const input = editor.querySelector('.c-edit-input');
+    input.value = current; input.focus();
+    editor.querySelector('.c-cancel').onclick = (ev) => { ev.preventDefault(); editor.remove(); if (actions) actions.style.display = ''; };
+    editor.querySelector('.c-save').onclick = async (ev) => {
+      ev.preventDefault();
+      const v = input.value.trim();
+      if (!v) return;
+      try {
+        const r = await api(`/api/comments/${cid}`, { method: 'PUT', body: { content: v } });
+        textEl.textContent = r.content;
+        if (!node.querySelector('.edited-tag')) {
+          textEl.insertAdjacentHTML('afterend', ' <span class="edited-tag">(edited)</span>');
+        }
+        editor.remove(); if (actions) actions.style.display = '';
+      } catch (ex) { toast(ex.message || 'Could not edit comment.'); }
+    };
+  };
+  if (delLink) delLink.onclick = async (e) => {
+    e.preventDefault();
+    if (!confirm('Delete this comment?')) return;
+    try {
+      await api(`/api/comments/${cid}`, { method: 'DELETE' });
+      node.remove();
+      const stat = el.querySelector('.comment-stat');
+      const m = stat.textContent.match(/(\d+) comments · (\d+) reposts/);
+      if (m && +m[1] > 0) stat.textContent = `${(+m[1])-1} comments · ${m[2]} reposts`;
+    } catch (ex) { toast(ex.message || 'Could not delete comment.'); }
   };
 }
 

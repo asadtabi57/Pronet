@@ -9,10 +9,52 @@
   let activeUser = null;
   const seen = new Set(); // message ids already rendered in the open conversation
 
+  // Messages are editable for 2 minutes, deletable for 5 minutes after sending.
+  const MSG_EDIT_MS = 2 * 60 * 1000;
+  const MSG_DELETE_MS = 5 * 60 * 1000;
+
   function bubbleHTML(m) {
     const mine = m.from_id === me.id;
-    return `<div class="msg-bubble ${mine ? 'from-me' : 'from-them'}" data-mid="${m.id}">${escapeHTML(m.content)}</div>
-            <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}</div>`;
+    const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
+    const age = Date.now() - m.created_at;
+    let actions = '';
+    if (mine) {
+      const parts = [];
+      if (age <= MSG_EDIT_MS) parts.push('<a href="#" class="m-edit">Edit</a>');
+      if (age <= MSG_DELETE_MS) parts.push('<a href="#" class="m-del">Delete</a>');
+      if (parts.length) actions = ' · ' + parts.join(' · ');
+    }
+    const edited = m.edited ? ' <span class="edited-tag">(edited)</span>' : '';
+    return `<div class="msg-item" data-mid="${m.id}" data-created="${m.created_at}">
+      <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
+        ${avatar(who, 'sm')}
+        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}"><span class="m-text">${escapeHTML(m.content)}</span></div>
+      </div>
+      <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}</div>
+    </div>`;
+  }
+
+  function findItem(id) {
+    const body = document.getElementById('conv-body');
+    return body ? body.querySelector(`.msg-item[data-mid="${id}"]`) : null;
+  }
+  function updateBubble(m) {
+    const item = findItem(m.id);
+    if (!item) return;
+    const t = item.querySelector('.m-text');
+    if (t) t.textContent = m.content;
+    const meta = item.querySelector('.msg-meta');
+    if (meta && !meta.querySelector('.edited-tag')) {
+      const tag = document.createElement('span');
+      tag.className = 'edited-tag';
+      tag.textContent = ' (edited)';
+      // Place right after the timestamp text node, before any action links.
+      meta.insertBefore(tag, meta.childNodes[1] || null);
+    }
+  }
+  function removeBubble(id) {
+    const item = findItem(id);
+    if (item) item.remove();
   }
 
   async function loadThreads() {
@@ -120,12 +162,64 @@
   RT.on('message', (d) => {
     if (!d || !d.message) return;
     const m = d.message;
+    const action = d.action || 'new';
     const otherId = m.from_id === me.id ? m.to_id : m.from_id;
+    if (action === 'update') {
+      if (active && otherId === active) updateBubble(m);
+      loadThreads();
+      return;
+    }
+    if (action === 'delete') {
+      if (active && otherId === active) removeBubble(m.id);
+      loadThreads();
+      return;
+    }
     if (active && otherId === active) {
       appendLiveMessage(m);
       if (m.to_id === me.id) api(`/api/messages/${active}`).catch(() => {});
     }
     loadThreads();
+  });
+
+  // ===== Edit / delete own messages (delegated; convEl persists across renders) =====
+  convEl.addEventListener('click', async (e) => {
+    const editA = e.target.closest('.m-edit');
+    const delA = e.target.closest('.m-del');
+    if (!editA && !delA) return;
+    e.preventDefault();
+    const item = e.target.closest('.msg-item');
+    if (!item) return;
+    const mid = item.dataset.mid;
+
+    if (delA) {
+      if (!confirm('Delete this message?')) return;
+      try { await api(`/api/messages/${mid}`, { method: 'DELETE' }); removeBubble(mid); loadThreads(); }
+      catch (ex) { toast(ex.message || 'Could not delete message.'); }
+      return;
+    }
+
+    // Inline edit
+    const bubble = item.querySelector('.msg-bubble');
+    const textEl = item.querySelector('.m-text');
+    if (item.querySelector('.m-edit-box')) return; // already editing
+    const current = textEl.textContent;
+    const box = document.createElement('div');
+    box.className = 'm-edit-box';
+    box.innerHTML = `<input class="m-edit-input" /><div class="m-edit-actions"><a href="#" class="m-save">Save</a> · <a href="#" class="m-cancel">Cancel</a></div>`;
+    bubble.appendChild(box);
+    const input = box.querySelector('.m-edit-input');
+    input.value = current; input.focus();
+    box.querySelector('.m-cancel').onclick = (ev) => { ev.preventDefault(); box.remove(); };
+    box.querySelector('.m-save').onclick = async (ev) => {
+      ev.preventDefault();
+      const v = input.value.trim();
+      if (!v) return;
+      try {
+        const r = await api(`/api/messages/${mid}`, { method: 'PUT', body: { content: v } });
+        box.remove();
+        updateBubble({ id: mid, from_id: me.id, content: r.content });
+      } catch (ex) { toast(ex.message || 'Could not edit message.'); }
+    };
   });
 
   // ===== Call logs (last 30 days) shown as system lines in the conversation =====
