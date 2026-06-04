@@ -907,6 +907,12 @@ body.app {
 }
 .msg-meta a:hover, .comment-actions a:hover, .m-edit-actions a:hover, .comment-edit a:hover { text-decoration: underline; }
 .edited-tag { color: var(--muted); font-size: var(--fs-11); }
+/* Delivery/read ticks on outgoing messages: grey single = sent, blue double = seen. */
+.msg-ticks { margin-left: 6px; font-size: var(--fs-12); color: var(--muted); letter-spacing: -2px; font-weight: 700; }
+.msg-ticks.read { color: var(--brand); }
+/* Online / last-seen line under the peer's name + headline in the chat header. */
+.conv-status { color: var(--muted); font-size: 11px; margin-top: 1px; }
+.conv-status.online { color: #16a34a; font-weight: 600; }
 .comment-actions { margin-top: 4px; font-size: var(--fs-12); }
 .comment-edit { margin-top: 6px; }
 .m-edit-box { margin-top: 6px; }

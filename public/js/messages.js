@@ -25,12 +25,15 @@
       if (parts.length) actions = ' · ' + parts.join(' · ');
     }
     const edited = m.edited ? ' <span class="edited-tag">(edited)</span>' : '';
+    const ticks = mine
+      ? `<span class="msg-ticks${m.read ? ' read' : ''}" title="${m.read ? 'Seen' : 'Sent'}" aria-hidden="true">${m.read ? '✓✓' : '✓'}</span>`
+      : '';
     return `<div class="msg-item" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
         <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}"><span class="m-text">${escapeHTML(m.content)}</span></div>
       </div>
-      <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}</div>
+      <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}${ticks}</div>
     </div>`;
   }
 
@@ -55,6 +58,34 @@
   function removeBubble(id) {
     const item = findItem(id);
     if (item) item.remove();
+  }
+
+  // "Active now" if online, otherwise "last seen 5m ago".
+  function statusText(user) {
+    if (!user) return '';
+    if (window.Presence && Presence.isOnline(user.id)) return 'Active now';
+    if (user.last_seen) return 'last seen ' + timeAgo(user.last_seen);
+    return '';
+  }
+  function isUserOnline(user) {
+    if (!user) return false;
+    if (window.Presence && Presence.seeded) return Presence.isOnline(user.id);
+    return !!user.online;
+  }
+  function renderStatusLine(user) {
+    const el = document.getElementById('conv-status');
+    if (!el) return;
+    const online = isUserOnline(user);
+    el.textContent = statusText(user);
+    el.classList.toggle('online', online);
+  }
+  // Flip every outgoing bubble's tick to the blue double "seen" state.
+  function markOutgoingSeen() {
+    document.querySelectorAll('#conv-body .msg-ticks').forEach(s => {
+      s.classList.add('read');
+      s.textContent = '✓✓';
+      s.title = 'Seen';
+    });
   }
 
   async function loadThreads() {
@@ -109,6 +140,7 @@
         <div class="conv-head-info">
           <div style="font-weight:700">${escapeHTML(user.name)}</div>
           <div style="color:var(--muted);font-size:12px">${escapeHTML(user.headline || '')}</div>
+          <div class="conv-status${isUserOnline(user) ? ' online' : ''}" id="conv-status">${escapeHTML(statusText(user))}</div>
         </div>
         <div class="spacer" style="flex:1"></div>
         <div class="conv-head-actions" id="conv-call-actions"></div>
@@ -160,7 +192,11 @@
 
   // ===== Realtime: live incoming/outgoing messages =====
   RT.on('message', (d) => {
-    if (!d || !d.message) return;
+    if (!d || !d.message) {
+      // Read-receipt ping: the peer opened our conversation and saw our messages.
+      if (d && d.action === 'read' && active && Number(d.by) === active) markOutgoingSeen();
+      return;
+    }
     const m = d.message;
     const action = d.action || 'new';
     const otherId = m.from_id === me.id ? m.to_id : m.from_id;
@@ -179,6 +215,16 @@
       if (m.to_id === me.id) api(`/api/messages/${active}`).catch(() => {});
     }
     loadThreads();
+  });
+
+  // ===== Realtime: keep the chat header's online / last-seen line current =====
+  RT.on('presence', (d) => {
+    if (!d || d.user_id == null || !activeUser) return;
+    if (Number(d.user_id) !== Number(activeUser.id)) return;
+    // On going offline we don't get an exact timestamp from the event, so stamp
+    // "now" locally; a fresh open of the thread will reconcile with the server.
+    if (!d.online) activeUser.last_seen = Date.now();
+    renderStatusLine(activeUser);
   });
 
   // ===== Edit / delete own messages (delegated; convEl persists across renders) =====

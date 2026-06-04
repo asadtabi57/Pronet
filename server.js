@@ -187,6 +187,8 @@ function buildUserDTO(u, viewerId, connectionCount, rel) {
     cover_color: u.cover_color || '#a0c4ff',
     subscription: u.subscription || null,
     connection_count: connectionCount || 0,
+    online: isUserOnline(uid),
+    last_seen: u.last_seen != null ? Number(u.last_seen) : null,
   };
   if (viewerId != null && viewerId !== uid) {
     out.connected = false;
@@ -647,8 +649,12 @@ app.get('/api/events', wrap(async (req, res) => {
   req.on('close', () => {
     clearInterval(hb);
     sseRemove(user.id, res);
-    // Last connection closed -> the user just went offline.
-    if (!isUserOnline(user.id)) broadcastPresence(user.id, false);
+    // Last connection closed -> the user just went offline. Stamp last_seen so
+    // peers can show "last seen 5m ago" in the chat header.
+    if (!isUserOnline(user.id)) {
+      broadcastPresence(user.id, false);
+      q(`UPDATE users SET last_seen = $1 WHERE id = $2`, [Date.now(), user.id]).catch(() => {});
+    }
   });
 }));
 
@@ -1464,7 +1470,7 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const other = Number(req.params.userId);
   // User lookup, thread fetch, and marking-as-read are independent → run them
   // together so the whole endpoint costs ~one round-trip of latency.
-  const [u, r] = await Promise.all([
+  const [u, r, upd] = await Promise.all([
     findUser(other),
     q(`SELECT id, from_id, to_id, content, attached_post_id, created_at, read, edited
          FROM messages
@@ -1473,6 +1479,11 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
     q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`, [other, req.user.id]),
   ]);
   if (!u) return res.status(404).json({ error: 'User not found' });
+  // If we just marked the peer's messages as read, tell the peer live so their
+  // outgoing bubbles flip from a grey single tick to a blue double tick.
+  if (upd && upd.rowCount > 0) {
+    sseSend(other, 'message', { action: 'read', by: req.user.id });
+  }
   const messages = r.rows.map(m => ({
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
