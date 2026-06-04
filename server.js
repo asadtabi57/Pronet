@@ -1395,17 +1395,38 @@ app.post('/api/posts/:id/share', authRequired, wrap(async (req, res) => {
 app.post('/api/posts/:id/send', authRequired, wrap(async (req, res) => {
   const id = Number(req.params.id);
   const { to_user_id, note } = req.body || {};
-  const postR = await q(`SELECT id, content FROM posts WHERE id = $1`, [id]);
+  const postR = await q(
+    `SELECT p.id, p.content, u.name AS author_name
+       FROM posts p JOIN users u ON u.id = p.user_id
+      WHERE p.id = $1`, [id]
+  );
   const recipient = await findUser(Number(to_user_id));
   if (postR.rowCount === 0 || !recipient) return res.status(404).json({ error: 'Not found' });
-  const text = `${note ? sanitizeText(note) + '\n\n' : ''}[Shared post #${id}] ${postR.rows[0].content || ''}`.trim();
+  // Store only the user's own note as the message text. The post itself rides in
+  // attached_post_id, so the client renders a clickable post-reference card that
+  // links straight to the post — no more dumping the raw post body as plain text.
+  const text = sanitizeText((note || '').trim());
   const ins = await q(
     `INSERT INTO messages (from_id, to_id, content, attached_post_id, created_at, read)
-     VALUES ($1,$2,$3,$4,$5,0) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,0) RETURNING *`,
     [req.user.id, recipient.id, text, id, Date.now()]
   );
-  await notify(Number(recipient.id), 'message', req.user.id, { message_id: Number(ins.rows[0].id) });
-  res.json({ ok: true });
+  const m = ins.rows[0];
+  // Hand messageDTO the post preview columns so the bubble shows author + snippet.
+  m.sp_content = postR.rows[0].content;
+  m.sp_author_name = postR.rows[0].author_name;
+  const dto = messageDTO(m);
+  res.json({ ok: true, message: dto });
+  // Realtime fan-out (notification + live bubble) shouldn't block the response.
+  (async () => {
+    await notify(Number(recipient.id), 'message', req.user.id, { message_id: Number(m.id) });
+    const [sender, peer] = await Promise.all([
+      publicUser(await findUser(req.user.id), recipient.id),
+      publicUser(recipient, req.user.id),
+    ]);
+    sseSend(recipient.id, 'message', { message: dto, peer: sender, action: 'new' });
+    sseSend(req.user.id, 'message', { message: dto, peer, action: 'new' });
+  })().catch(() => {});
 }));
 
 // --- People / Connections ---
@@ -1768,7 +1789,7 @@ async function storeChatAttachment(att, fromId, toId) {
   return storeChatBuffer(Buffer.from(m[2], 'base64'), m[1], att.name, fromId, toId);
 }
 function messageDTO(m) {
-  return {
+  const dto = {
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content,
     attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
@@ -1778,6 +1799,17 @@ function messageDTO(m) {
     } : null,
     created_at: Number(m.created_at), read: m.read, edited: m.edited ? 1 : 0,
   };
+  // When a post was shared into the DM, surface a small preview so the client
+  // can render a clickable post-reference card (author + snippet + permalink)
+  // instead of dumping the raw post text. sp_* columns come from a LEFT JOIN.
+  if (m.attached_post_id && (m.sp_content !== undefined || m.sp_author_name !== undefined)) {
+    dto.shared_post = {
+      id: Number(m.attached_post_id),
+      preview: (m.sp_content || '').slice(0, 140),
+      author_name: m.sp_author_name || null,
+    };
+  }
+  return dto;
 }
 
 app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
@@ -1787,7 +1819,7 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
          FROM messages WHERE from_id = $1 OR to_id = $1
      ),
      latest AS (
-       SELECT DISTINCT ON (other_id) other_id, id, from_id, to_id, content, attachment_type, created_at, read
+       SELECT DISTINCT ON (other_id) other_id, id, from_id, to_id, content, attachment_type, attached_post_id, created_at, read
          FROM mine
          ORDER BY other_id, created_at DESC
      )
@@ -1805,6 +1837,7 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
       last_message: {
         id: Number(row.id), from_id: Number(row.from_id), to_id: Number(row.to_id),
         content: row.content, attachment_type: row.attachment_type || null,
+        attached_post_id: row.attached_post_id ? Number(row.attached_post_id) : null,
         created_at: Number(row.created_at), read: row.read,
       },
       unread: row.unread,
@@ -1821,10 +1854,15 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   // serial `publicUser` call AFTER this wave, adding two extra round-trips.)
   const [userMap, r, upd] = await Promise.all([
     publicUsersByIds([other], req.user.id),
-    q(`SELECT id, from_id, to_id, content, attached_post_id, attachment_url, attachment_type, attachment_name, attachment_size, created_at, read, edited
-         FROM messages
-        WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
-        ORDER BY created_at ASC`, [req.user.id, other]),
+    q(`SELECT m.id, m.from_id, m.to_id, m.content, m.attached_post_id,
+              m.attachment_url, m.attachment_type, m.attachment_name, m.attachment_size,
+              m.created_at, m.read, m.edited,
+              sp.content AS sp_content, spu.name AS sp_author_name
+         FROM messages m
+         LEFT JOIN posts sp ON sp.id = m.attached_post_id
+         LEFT JOIN users spu ON spu.id = sp.user_id
+        WHERE (m.from_id = $1 AND m.to_id = $2) OR (m.from_id = $2 AND m.to_id = $1)
+        ORDER BY m.created_at ASC`, [req.user.id, other]),
     q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`, [other, req.user.id]),
   ]);
   const userDTO = userMap.get(other);

@@ -70,6 +70,33 @@
     });
   }
 
+  // A post shared into the DM: strip any inlined post text from the displayed
+  // note (legacy messages stored "[Shared post #N] <body>") and render the post
+  // as a clickable reference card that deep-links to the post itself.
+  function sharedNoteText(m) {
+    let text = m.content || '';
+    if (m.attached_post_id) {
+      const idx = text.indexOf('[Shared post #');
+      if (idx >= 0) text = text.slice(0, idx).trim();
+    }
+    return text;
+  }
+  function sharedPostHTML(m) {
+    if (!m.attached_post_id) return '';
+    const sp = m.shared_post || {};
+    const href = `/feed.html#post-${m.attached_post_id}`;
+    const author = sp.author_name ? `<span class="spc-author">${escapeHTML(sp.author_name)}</span>` : '';
+    const snippet = sp.preview ? `<span class="spc-snippet">${escapeHTML(sp.preview)}</span>` : '';
+    return `<a class="shared-post-card" href="${href}">
+        <span class="spc-ico" aria-hidden="true">📄</span>
+        <span class="spc-body">
+          <span class="spc-title">Shared a post</span>
+          ${author}${snippet}
+          <span class="spc-go">View post →</span>
+        </span>
+      </a>`;
+  }
+
   function bubbleHTML(m, pending) {
     const mine = m.from_id === me.id;
     const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
@@ -87,12 +114,14 @@
     // of the read ticks (which only make sense once the server has it).
     const ticks = pending ? '<span class="m-sending">Sending…</span>' : (mine ? tickHTML(m.read) : '');
     const attHTML = attachmentHTML(m.attachment);
-    const textHTML = m.content ? `<span class="m-text">${escapeHTML(m.content)}</span>` : '';
-    const attOnly = attHTML && !textHTML ? ' att-only' : '';
+    const postHTML = sharedPostHTML(m);
+    const noteText = m.attached_post_id ? sharedNoteText(m) : m.content;
+    const textHTML = noteText ? `<span class="m-text">${escapeHTML(noteText)}</span>` : '';
+    const attOnly = (attHTML || postHTML) && !textHTML ? ' att-only' : '';
     return `<div class="msg-item${pending ? ' sending' : ''}" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
-        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML ? ' has-att' : ''}${attOnly}">${attHTML}${textHTML}</div>
+        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML || postHTML ? ' has-att' : ''}${attOnly}">${attHTML}${textHTML}${postHTML}</div>
       </div>
       <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}${ticks}</div>
     </div>`;
@@ -166,7 +195,16 @@
     }
     listEl.innerHTML = head + threads.map(t => {
       const lm = t.last_message;
-      let preview = lm.content ? escapeHTML(lm.content.slice(0, 80)) : '';
+      let previewText = lm.content || '';
+      // Hide the legacy "[Shared post #N] …" marker from the list preview.
+      if (lm.attached_post_id) {
+        const idx = previewText.indexOf('[Shared post #');
+        if (idx >= 0) previewText = previewText.slice(0, idx).trim();
+      }
+      let preview = previewText ? escapeHTML(previewText.slice(0, 80)) : '';
+      if (!preview && lm.attached_post_id) {
+        preview = '📄 Shared a post';
+      }
       if (!preview && lm.attachment_type) {
         preview = '📎 ' + (lm.attachment_type.startsWith('image/') ? 'Photo'
           : lm.attachment_type.startsWith('video/') ? 'Video'
