@@ -13,6 +13,14 @@
   const MSG_EDIT_MS = 2 * 60 * 1000;
   const MSG_DELETE_MS = 5 * 60 * 1000;
 
+  // Seamless single-path tick glyphs (Material "done" / "done_all"); the
+  // double-check is one connected shape so there's no gap between the ticks.
+  const TICK_SENT = '<svg class="tick-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
+  const TICK_SEEN = '<svg class="tick-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z"/></svg>';
+  function tickHTML(read) {
+    return `<span class="msg-ticks${read ? ' read' : ''}" title="${read ? 'Seen' : 'Sent'}">${read ? TICK_SEEN : TICK_SENT}</span>`;
+  }
+
   function bubbleHTML(m) {
     const mine = m.from_id === me.id;
     const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
@@ -25,9 +33,7 @@
       if (parts.length) actions = ' · ' + parts.join(' · ');
     }
     const edited = m.edited ? ' <span class="edited-tag">(edited)</span>' : '';
-    const ticks = mine
-      ? `<span class="msg-ticks${m.read ? ' read' : ''}" title="${m.read ? 'Seen' : 'Sent'}" aria-hidden="true">${m.read ? '✓✓' : '✓'}</span>`
-      : '';
+    const ticks = mine ? tickHTML(m.read) : '';
     return `<div class="msg-item" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
@@ -83,7 +89,7 @@
   function markOutgoingSeen() {
     document.querySelectorAll('#conv-body .msg-ticks').forEach(s => {
       s.classList.add('read');
-      s.textContent = '✓✓';
+      s.innerHTML = TICK_SEEN;
       s.title = 'Seen';
     });
   }

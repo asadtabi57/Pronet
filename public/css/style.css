@@ -907,9 +907,12 @@ body.app {
 }
 .msg-meta a:hover, .comment-actions a:hover, .m-edit-actions a:hover, .comment-edit a:hover { text-decoration: underline; }
 .edited-tag { color: var(--muted); font-size: var(--fs-11); }
-/* Delivery/read ticks on outgoing messages: grey single = sent, blue double = seen. */
-.msg-ticks { margin-left: 6px; font-size: var(--fs-12); color: var(--muted); letter-spacing: -2px; font-weight: 700; }
-.msg-ticks.read { color: var(--brand); }
+/* Delivery/read ticks on outgoing messages: grey = sent, vibrant blue = seen.
+   Uses a single-path SVG (Material done/done_all) so the double-check is one
+   seamless shape with no gap, sized to sit subtly beside the timestamp. */
+.msg-ticks { display: inline-flex; align-items: center; margin-left: 5px; vertical-align: middle; color: var(--muted); }
+.msg-ticks .tick-ic { width: 15px; height: 15px; display: block; }
+.msg-ticks.read { color: #3b82f6; }
 /* Online / last-seen line under the peer's name + headline in the chat header. */
 .conv-status { color: var(--muted); font-size: 11px; margin-top: 1px; }
 .conv-status.online { color: #16a34a; font-weight: 600; }
