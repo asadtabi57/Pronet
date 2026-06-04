@@ -216,6 +216,20 @@ function buildUserDTO(u, viewerId, connectionCount, rel) {
   return out;
 }
 
+// Exactly the user columns buildUserDTO needs — nothing more. Selecting these
+// explicitly (instead of `SELECT *`) keeps password_hash, OAuth/verify/reset
+// tokens and supabase_id OUT of the wire and out of app memory, and trims row
+// width across the (distant) Sydney pooler link. USER_DTO_COLS_U is the same
+// list prefixed with `u.` for use inside JOINs.
+const USER_DTO_FIELDS = [
+  'id', 'name', 'email', 'headline', 'about', 'location',
+  'experience', 'education', 'skills', 'avatar_color', 'cover_color',
+  'avatar_url', 'subscription', 'last_seen',
+  'is_online_visible', 'is_last_seen_visible', 'profile_visibility',
+];
+const USER_DTO_COLS = USER_DTO_FIELDS.join(', ');
+const USER_DTO_COLS_U = USER_DTO_FIELDS.map(f => 'u.' + f).join(', ');
+
 async function publicUser(u, viewerId) {
   if (!u) return null;
   const uid = Number(u.id);
@@ -242,7 +256,7 @@ async function publicUsersByIds(ids, viewerId) {
   if (!uniq.length) return map;
 
   const [usersRes, ccRes, relRes] = await Promise.all([
-    q(`SELECT * FROM users WHERE id = ANY($1::bigint[])`, [uniq]),
+    q(`SELECT ${USER_DTO_COLS} FROM users WHERE id = ANY($1::bigint[])`, [uniq]),
     // connection_count for every target in one pass
     q(`SELECT t AS id, COUNT(*)::int AS c FROM (
           SELECT user_a AS t FROM connections WHERE accepted = 1 AND user_a = ANY($1::bigint[])
@@ -502,6 +516,24 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '8mb' })); // headroom for chat attachments (<=5 MB) sent as base64
 app.use(cookieParser());
+
+// [PERF] Lightweight request-timing middleware. Logs each API controller's wall
+// time to the server console (e.g. "[PERF] GET /api/posts - 142ms") so slow
+// endpoints are easy to spot during real-world / automated testing. Skips the
+// SSE stream (which never "finishes"). Disable with PERF_LOG=0.
+if (process.env.PERF_LOG !== '0') {
+  app.use((req, res, next) => {
+    if (req.path === '/api/events') return next();
+    const startedAt = process.hrtime.bigint();
+    res.on('finish', () => {
+      if (!req.path.startsWith('/api/')) return;
+      const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const slow = ms >= 500 ? '  ⚠ SLOW' : '';
+      console.log(`[PERF] ${req.method} ${req.originalUrl.split('?')[0]} - ${ms.toFixed(0)}ms${slow}`);
+    });
+    next();
+  });
+}
 
 // Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
 const BUILD_ID = Date.now().toString(36);
@@ -1073,7 +1105,7 @@ app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
   // sequential DB round-trips down to one wave.
   const [userR, posts] = await Promise.all([
     q(
-      `SELECT u.*,
+      `SELECT ${USER_DTO_COLS_U},
               (SELECT COUNT(*)::int FROM connections c
                  WHERE (c.user_a = u.id OR c.user_b = u.id) AND c.accepted = 1) AS connection_count,
               (SELECT c.user_a FROM connections c
@@ -1378,11 +1410,27 @@ app.post('/api/posts/:id/send', authRequired, wrap(async (req, res) => {
 
 // --- People / Connections ---
 app.get('/api/people', authRequired, wrap(async (req, res) => {
+  // Single-wave discovery: fetch the random candidates together with their
+  // connection_count and the viewer's relationship inline, instead of a random-
+  // id query followed by a separate publicUsersByIds wave (2 round-trips → 1).
+  const viewerId = req.user.id;
   const r = await q(
-    `SELECT * FROM users WHERE id <> $1 ORDER BY RANDOM() LIMIT 20`, [req.user.id]
+    `SELECT ${USER_DTO_COLS_U},
+            (SELECT COUNT(*)::int FROM connections c
+               WHERE (c.user_a = u.id OR c.user_b = u.id) AND c.accepted = 1) AS connection_count,
+            (SELECT c.user_a FROM connections c
+               WHERE (c.user_a = $1 AND c.user_b = u.id)
+                  OR (c.user_b = $1 AND c.user_a = u.id) LIMIT 1) AS rel_user_a,
+            (SELECT c.accepted FROM connections c
+               WHERE (c.user_a = $1 AND c.user_b = u.id)
+                  OR (c.user_b = $1 AND c.user_a = u.id) LIMIT 1) AS rel_accepted
+       FROM users u WHERE u.id <> $1 ORDER BY RANDOM() LIMIT 20`,
+    [viewerId]
   );
-  const userMap = await publicUsersByIds(r.rows.map(u => u.id), req.user.id);
-  const out = r.rows.map(u => userMap.get(Number(u.id))).filter(Boolean);
+  const out = r.rows.map(u => {
+    const rel = u.rel_user_a != null ? { user_a: u.rel_user_a, accepted: u.rel_accepted } : null;
+    return buildUserDTO(u, viewerId, u.connection_count, rel);
+  });
   res.json({ people: out });
 }));
 
@@ -1459,7 +1507,7 @@ app.get('/api/connections', authRequired, wrap(async (req, res) => {
   // wave that redundantly re-selected the same user rows.
   const viewerId = req.user.id;
   const r = await q(
-    `SELECT u.*,
+    `SELECT ${USER_DTO_COLS_U},
             (SELECT COUNT(*)::int FROM connections c2
                WHERE (c2.user_a = u.id OR c2.user_b = u.id) AND c2.accepted = 1) AS connection_count
        FROM users u
@@ -1477,7 +1525,7 @@ app.get('/api/connections', authRequired, wrap(async (req, res) => {
 // Pending connection requests sent TO me
 app.get('/api/connections/requests', authRequired, wrap(async (req, res) => {
   const r = await q(
-    `SELECT u.*, c.created_at AS requested_at FROM users u
+    `SELECT u.id, c.created_at AS requested_at FROM users u
        JOIN connections c ON c.user_a = u.id AND c.user_b = $1 AND c.accepted = 0
       ORDER BY c.created_at DESC`,
     [req.user.id]
@@ -1767,24 +1815,27 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
 
 app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const other = Number(req.params.userId);
-  // User lookup, thread fetch, and marking-as-read are independent → run them
-  // together so the whole endpoint costs ~one round-trip of latency.
-  const [u, r, upd] = await Promise.all([
-    findUser(other),
+  // User DTO (rows + count + relationship in one batched wave), thread fetch and
+  // mark-as-read are all independent → run them together so the whole endpoint
+  // costs ~one round-trip. (Previously the user DTO was built with a second
+  // serial `publicUser` call AFTER this wave, adding two extra round-trips.)
+  const [userMap, r, upd] = await Promise.all([
+    publicUsersByIds([other], req.user.id),
     q(`SELECT id, from_id, to_id, content, attached_post_id, attachment_url, attachment_type, attachment_name, attachment_size, created_at, read, edited
          FROM messages
         WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
         ORDER BY created_at ASC`, [req.user.id, other]),
     q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`, [other, req.user.id]),
   ]);
-  if (!u) return res.status(404).json({ error: 'User not found' });
+  const userDTO = userMap.get(other);
+  if (!userDTO) return res.status(404).json({ error: 'User not found' });
   // If we just marked the peer's messages as read, tell the peer live so their
   // outgoing bubbles flip from a grey single tick to a blue double tick.
   if (upd && upd.rowCount > 0) {
     sseSend(other, 'message', { action: 'read', by: req.user.id });
   }
   const messages = r.rows.map(messageDTO);
-  res.json({ user: await publicUser(u, req.user.id), messages });
+  res.json({ user: userDTO, messages });
 }));
 
 // Lightweight read-marker. The live message handler calls this when a new
