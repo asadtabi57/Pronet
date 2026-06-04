@@ -471,7 +471,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '8mb' })); // headroom for chat attachments (<=5 MB) sent as base64
 app.use(cookieParser());
 
 // Long-cache hashed-looking assets; short-cache HTML so deploys appear instantly
@@ -1434,6 +1434,65 @@ app.get('/api/calls/logs/:userId', authRequired, wrap(async (req, res) => {
 }));
 
 // --- Messaging ---
+
+// Chat attachments: allowlisted MIME types (no SVG/HTML/executables) up to 5 MB.
+const ATTACH_MAX_BYTES = 5 * 1024 * 1024;
+const ATTACH_MIME_EXT = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'application/pdf': 'pdf', 'text/plain': 'txt',
+  'application/zip': 'zip', 'application/x-zip-compressed': 'zip',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'weba',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv',
+};
+function sanitizeFilename(name) {
+  if (!name || typeof name !== 'string') return null;
+  const clean = name.replace(/[\r\n]/g, ' ').replace(/[^\w.\- ]+/g, '_').trim().slice(0, 120);
+  return clean || null;
+}
+// Validate a base64 data URL, enforce type + size, upload to storage, return
+// { url, type, name, size } — or throws an { status, message } shaped error.
+async function storeChatAttachment(att, fromId, toId) {
+  const m = String(att.data_url || '').match(/^data:([\w.+-]+\/[\w.+-]+);base64,(.+)$/);
+  if (!m) throw { status: 400, message: 'Invalid attachment' };
+  const mime = m[1].toLowerCase();
+  const ext = ATTACH_MIME_EXT[mime];
+  if (!ext) throw { status: 415, message: 'Unsupported file type' };
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length) throw { status: 400, message: 'Empty attachment' };
+  if (buf.length > ATTACH_MAX_BYTES) throw { status: 413, message: 'Attachment too large (max 5 MB)' };
+  const name = sanitizeFilename(att.name) || `file.${ext}`;
+  const key = `chat/${fromId}_${toId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  let url;
+  if (storage.enabled()) {
+    url = await storage.uploadFile(key, buf, mime);
+  } else {
+    const uploads = path.join(__dirname, 'public', 'uploads');
+    if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
+    const local = key.replace(/\//g, '_');
+    fs.writeFileSync(path.join(uploads, local), buf);
+    url = `/uploads/${local}`;
+  }
+  return { url, type: mime, name, size: buf.length };
+}
+function messageDTO(m) {
+  return {
+    id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
+    content: m.content,
+    attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
+    attachment: m.attachment_url ? {
+      url: m.attachment_url, type: m.attachment_type || '',
+      name: m.attachment_name || '', size: m.attachment_size != null ? Number(m.attachment_size) : null,
+    } : null,
+    created_at: Number(m.created_at), read: m.read, edited: m.edited ? 1 : 0,
+  };
+}
+
 app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
   const r = await q(
     `WITH mine AS (
@@ -1441,7 +1500,7 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
          FROM messages WHERE from_id = $1 OR to_id = $1
      ),
      latest AS (
-       SELECT DISTINCT ON (other_id) other_id, id, from_id, to_id, content, created_at, read
+       SELECT DISTINCT ON (other_id) other_id, id, from_id, to_id, content, attachment_type, created_at, read
          FROM mine
          ORDER BY other_id, created_at DESC
      )
@@ -1458,7 +1517,8 @@ app.get('/api/messages/threads', authRequired, wrap(async (req, res) => {
       user: userMap.get(Number(row.other_id)) || null,
       last_message: {
         id: Number(row.id), from_id: Number(row.from_id), to_id: Number(row.to_id),
-        content: row.content, created_at: Number(row.created_at), read: row.read,
+        content: row.content, attachment_type: row.attachment_type || null,
+        created_at: Number(row.created_at), read: row.read,
       },
       unread: row.unread,
     });
@@ -1472,7 +1532,7 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   // together so the whole endpoint costs ~one round-trip of latency.
   const [u, r, upd] = await Promise.all([
     findUser(other),
-    q(`SELECT id, from_id, to_id, content, attached_post_id, created_at, read, edited
+    q(`SELECT id, from_id, to_id, content, attached_post_id, attachment_url, attachment_type, attachment_name, attachment_size, created_at, read, edited
          FROM messages
         WHERE (from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1)
         ORDER BY created_at ASC`, [req.user.id, other]),
@@ -1484,11 +1544,7 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   if (upd && upd.rowCount > 0) {
     sseSend(other, 'message', { action: 'read', by: req.user.id });
   }
-  const messages = r.rows.map(m => ({
-    id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
-    content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
-    created_at: Number(m.created_at), read: m.read, edited: m.edited ? 1 : 0,
-  }));
+  const messages = r.rows.map(messageDTO);
   res.json({ user: await publicUser(u, req.user.id), messages });
 }));
 
@@ -1496,20 +1552,29 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const other = Number(req.params.userId);
   const u = await findUser(other);
   if (!u) return res.status(404).json({ error: 'User not found' });
-  const { content } = req.body || {};
-  if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
+  const { content, attachment } = req.body || {};
+  const text = (content || '').trim();
+
+  let att = null;
+  if (attachment && attachment.data_url) {
+    try {
+      att = await storeChatAttachment(attachment, req.user.id, other);
+    } catch (e) {
+      if (e && e.status) return res.status(e.status).json({ error: e.message });
+      console.error('Attachment upload failed:', e && e.message);
+      return res.status(502).json({ error: 'Upload failed' });
+    }
+  }
+  if (!text && !att) return res.status(400).json({ error: 'Content required' });
+
   const ins = await q(
-    `INSERT INTO messages (from_id, to_id, content, created_at, read)
-     VALUES ($1,$2,$3,$4,0) RETURNING *`,
-    [req.user.id, other, sanitizeText(content.trim()), Date.now()]
+    `INSERT INTO messages (from_id, to_id, content, attachment_url, attachment_type, attachment_name, attachment_size, created_at, read)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0) RETURNING *`,
+    [req.user.id, other, sanitizeText(text), att ? att.url : null, att ? att.type : null,
+     att ? att.name : null, att ? att.size : null, Date.now()]
   );
-  await notify(other, 'message', req.user.id, { message_id: Number(ins.rows[0].id) });
   const m = ins.rows[0];
-  const dto = {
-    id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
-    content: m.content, attached_post_id: m.attached_post_id ? Number(m.attached_post_id) : null,
-    created_at: Number(m.created_at), read: m.read, edited: 0,
-  };
+  const dto = messageDTO(m);
   // Respond to the sender immediately; the notification + realtime fan-out (for
   // the receiver and other tabs) don't need to block the HTTP response.
   res.json({ message: dto });

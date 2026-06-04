@@ -884,6 +884,7 @@ body.app {
   display: flex; flex-direction: column; height: 100%;
   min-height: 0; min-width: 0;
   background: var(--card);
+  position: relative;
 }
 .msg-conv-head {
   padding: 14px 22px; border-bottom: 1px solid var(--line);
@@ -977,6 +978,70 @@ body.app {
   border-color: var(--brand);
   box-shadow: 0 0 0 4px var(--brand-ring);
 }
+
+/* ---------- Chat attachments ---------- */
+.msg-attach-btn {
+  flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--bg-app);
+  color: var(--muted); display: flex; align-items: center; justify-content: center;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.msg-attach-btn:hover { background: var(--brand-ring); color: var(--brand); border-color: var(--brand); }
+.msg-attach-btn svg { width: 22px; height: 22px; }
+
+.msg-attach-preview {
+  padding: 10px 18px 0; background: var(--card);
+}
+.att-chip {
+  display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg-app);
+}
+.att-chip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+.att-chip .att-ic { font-size: 26px; line-height: 1; width: 44px; text-align: center; flex-shrink: 0; }
+.att-info { display: flex; flex-direction: column; min-width: 0; }
+.att-name { font-weight: 600; font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.att-size { color: var(--muted); font-size: var(--fs-11); }
+.att-remove {
+  margin-left: 4px; flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+  border: 0; background: rgba(0,0,0,.06); color: var(--ink-2);
+  font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.att-remove:hover { background: rgba(0,0,0,.12); }
+
+/* Attachments rendered inside message bubbles */
+.msg-bubble.has-att { padding: 6px; }
+.msg-bubble.has-att .m-text { display: block; padding: 2px 8px 4px; }
+.msg-bubble.att-only { background: transparent; box-shadow: none; padding: 0; }
+.msg-att-img { display: block; }
+.msg-att-img img {
+  display: block; max-width: 260px; max-height: 320px; width: 100%;
+  border-radius: 12px; object-fit: cover;
+}
+.msg-att-media { display: block; max-width: 280px; width: 100%; border-radius: 12px; background: #000; }
+.msg-att-audio { display: block; width: 240px; max-width: 100%; }
+.msg-att-file {
+  display: flex; align-items: center; gap: 10px; min-width: 200px; max-width: 280px;
+  padding: 10px 12px; border-radius: 12px; background: var(--card);
+  border: 1px solid var(--line); color: inherit;
+}
+.msg-bubble.from-me .msg-att-file { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.35); }
+.msg-att-file .att-ic { font-size: 26px; line-height: 1; flex-shrink: 0; }
+.msg-att-file:hover { filter: brightness(0.98); }
+
+/* Drag-and-drop overlay */
+.msg-conv.drag-over::after {
+  content: ''; position: absolute; inset: 0; z-index: 5;
+  background: var(--brand-ring); border: 2px dashed var(--brand);
+  border-radius: 12px; pointer-events: none;
+}
+.msg-drop-hint {
+  display: none; position: absolute; left: 50%; top: 50%; z-index: 6;
+  transform: translate(-50%, -50%); pointer-events: none;
+  background: var(--brand); color: #fff; font-weight: 600; font-size: var(--fs-14);
+  padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow-md);
+}
+.msg-conv.drag-over .msg-drop-hint { display: block; }
 
 /* ==========================================================================
    NOTIFICATIONS

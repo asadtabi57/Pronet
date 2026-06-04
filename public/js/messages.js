@@ -21,6 +21,55 @@
     return `<span class="msg-ticks${read ? ' read' : ''}" title="${read ? 'Seen' : 'Sent'}">${read ? TICK_SEEN : TICK_SENT}</span>`;
   }
 
+  // ===== Attachments (one-to-one chat, <= 5 MB) =====
+  const MAX_ATTACH = 5 * 1024 * 1024;
+  const ATTACH_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,audio/*,video/*';
+  const PAPERCLIP = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+  function fmtSize(b) {
+    if (b == null) return '';
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return Math.round(b / 1024) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+  function fileGlyph(type) {
+    type = type || '';
+    if (type === 'application/pdf') return '📄';
+    if (type.includes('zip')) return '🗜️';
+    if (type.includes('word') || type === 'text/plain') return '📝';
+    if (type.includes('sheet') || type.includes('excel')) return '📊';
+    if (type.includes('presentation') || type.includes('powerpoint')) return '📽️';
+    if (type.startsWith('audio/')) return '🎵';
+    if (type.startsWith('video/')) return '🎬';
+    return '📎';
+  }
+  function attachmentHTML(att) {
+    if (!att || !att.url) return '';
+    const url = escapeHTML(att.url);
+    const type = att.type || '';
+    const name = escapeHTML(att.name || 'file');
+    if (type.startsWith('image/')) {
+      return `<a class="msg-att-img" href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${name}" loading="lazy"></a>`;
+    }
+    if (type.startsWith('video/')) {
+      return `<video class="msg-att-media" src="${url}" controls preload="metadata"></video>`;
+    }
+    if (type.startsWith('audio/')) {
+      return `<audio class="msg-att-audio" src="${url}" controls preload="metadata"></audio>`;
+    }
+    return `<a class="msg-att-file" href="${url}" target="_blank" rel="noopener" download="${name}">
+      <span class="att-ic">${fileGlyph(type)}</span>
+      <span class="att-info"><span class="att-name">${name}</span><span class="att-size">${fmtSize(att.size)}</span></span>
+    </a>`;
+  }
+  function readAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error('Could not read file'));
+      r.readAsDataURL(file);
+    });
+  }
+
   function bubbleHTML(m) {
     const mine = m.from_id === me.id;
     const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
@@ -28,16 +77,20 @@
     let actions = '';
     if (mine) {
       const parts = [];
-      if (age <= MSG_EDIT_MS) parts.push('<a href="#" class="m-edit">Edit</a>');
+      // Editing only makes sense when there is text to edit.
+      if (age <= MSG_EDIT_MS && m.content) parts.push('<a href="#" class="m-edit">Edit</a>');
       if (age <= MSG_DELETE_MS) parts.push('<a href="#" class="m-del">Delete</a>');
       if (parts.length) actions = ' · ' + parts.join(' · ');
     }
     const edited = m.edited ? ' <span class="edited-tag">(edited)</span>' : '';
     const ticks = mine ? tickHTML(m.read) : '';
+    const attHTML = attachmentHTML(m.attachment);
+    const textHTML = m.content ? `<span class="m-text">${escapeHTML(m.content)}</span>` : '';
+    const attOnly = attHTML && !textHTML ? ' att-only' : '';
     return `<div class="msg-item" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
-        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}"><span class="m-text">${escapeHTML(m.content)}</span></div>
+        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML ? ' has-att' : ''}${attOnly}">${attHTML}${textHTML}</div>
       </div>
       <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}${ticks}</div>
     </div>`;
@@ -101,15 +154,24 @@
       listEl.innerHTML = head + '<p class="empty">No conversations yet.<br/>Start one from someone\'s profile.</p>';
       return;
     }
-    listEl.innerHTML = head + threads.map(t => `
+    listEl.innerHTML = head + threads.map(t => {
+      const lm = t.last_message;
+      let preview = lm.content ? escapeHTML(lm.content.slice(0, 80)) : '';
+      if (!preview && lm.attachment_type) {
+        preview = '📎 ' + (lm.attachment_type.startsWith('image/') ? 'Photo'
+          : lm.attachment_type.startsWith('video/') ? 'Video'
+          : lm.attachment_type.startsWith('audio/') ? 'Audio' : 'Attachment');
+      }
+      return `
       <div class="msg-thread ${active === t.user.id ? 'active' : ''}" data-id="${t.user.id}">
         ${avatar(t.user, 'md')}
         <div class="body">
-          <div class="head"><span class="name">${escapeHTML(t.user.name)}</span><span class="time">${timeAgo(t.last_message.created_at)}</span></div>
-          <div class="preview">${escapeHTML(t.last_message.content.slice(0, 80))}</div>
+          <div class="head"><span class="name">${escapeHTML(t.user.name)}</span><span class="time">${timeAgo(lm.created_at)}</span></div>
+          <div class="preview">${preview}</div>
         </div>
         ${t.unread ? '<div class="unread-dot"></div>' : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     listEl.querySelectorAll('.msg-thread').forEach(node => {
       node.onclick = () => openConv(+node.dataset.id);
     });
@@ -156,10 +218,14 @@
         </a>
       </div>
       <div class="msg-conv-body" id="conv-body"></div>
+      <div class="msg-attach-preview" id="attach-preview" hidden></div>
       <form class="msg-form">
-        <textarea placeholder="Write a message…" required></textarea>
+        <button type="button" class="msg-attach-btn" id="attach-btn" title="Attach a file" aria-label="Attach a file">${PAPERCLIP}</button>
+        <input type="file" id="attach-input" class="msg-attach-input" accept="${ATTACH_ACCEPT}" hidden />
+        <textarea placeholder="Write a message…"></textarea>
         <button class="btn-fill" type="submit">Send</button>
-      </form>`;
+      </form>
+      <div class="msg-drop-hint" id="drop-hint">Drop file to send (max 5 MB)</div>`;
 
     // Call buttons (audio/video) — only for connected users.
     if (window.CallUI && user.connected) {
@@ -184,19 +250,128 @@
       scrollConvToBottom();
     }
     loadCallLogs(userId);
-    convEl.querySelector('form').onsubmit = async (ev) => {
-      ev.preventDefault();
-      const ta = ev.target.querySelector('textarea');
-      const v = ta.value.trim();
-      if (!v) return;
-      ta.value = '';
-      const { message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: v } });
-      appendLiveMessage(message);
-      loadThreads();
-    };
+    setupComposer(userId);
     const backBtn = document.getElementById('back');
     if (backBtn) backBtn.onclick = () => { shell.classList.remove('show-conv'); active = null; };
     loadThreads();
+  }
+
+  // Drag-and-drop wiring shared across conversations (convEl is reused).
+  let currentSetPending = null;
+  let dropWired = false;
+  function wireDropZoneOnce() {
+    if (dropWired) return;
+    dropWired = true;
+    let dragDepth = 0;
+    convEl.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault(); dragDepth++; convEl.classList.add('drag-over');
+    });
+    convEl.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
+    });
+    convEl.addEventListener('dragleave', (e) => {
+      e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; convEl.classList.remove('drag-over'); }
+    });
+    convEl.addEventListener('drop', (e) => {
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file) return;
+      e.preventDefault(); dragDepth = 0; convEl.classList.remove('drag-over');
+      if (currentSetPending) currentSetPending(file);
+    });
+  }
+
+  // Wire up the message composer: text + file attachments via the paperclip
+  // button, drag-and-drop onto the conversation, or paste from the clipboard.
+  function setupComposer(userId) {
+    const form = convEl.querySelector('.msg-form');
+    if (!form) return;
+    const ta = form.querySelector('textarea');
+    const sendBtn = form.querySelector('button[type="submit"]');
+    const attachBtn = document.getElementById('attach-btn');
+    const attachInput = document.getElementById('attach-input');
+    const preview = document.getElementById('attach-preview');
+    let pendingFile = null;
+    let previewUrl = null;
+
+    function clearPending() {
+      pendingFile = null;
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+      if (attachInput) attachInput.value = '';
+      if (preview) { preview.hidden = true; preview.innerHTML = ''; }
+    }
+    function setPending(file) {
+      if (!file) return;
+      if (file.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
+      pendingFile = file;
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+      let thumb;
+      if (file.type.startsWith('image/')) {
+        previewUrl = URL.createObjectURL(file);
+        thumb = `<img src="${previewUrl}" alt="">`;
+      } else {
+        thumb = `<span class="att-ic">${fileGlyph(file.type)}</span>`;
+      }
+      preview.innerHTML = `<div class="att-chip">${thumb}
+        <span class="att-info"><span class="att-name">${escapeHTML(file.name)}</span><span class="att-size">${fmtSize(file.size)}</span></span>
+        <button type="button" class="att-remove" title="Remove" aria-label="Remove attachment">×</button></div>`;
+      preview.hidden = false;
+      preview.querySelector('.att-remove').onclick = clearPending;
+    }
+
+    if (attachBtn && attachInput) {
+      attachBtn.onclick = () => attachInput.click();
+      attachInput.onchange = () => { if (attachInput.files[0]) setPending(attachInput.files[0]); };
+    }
+
+    // Drag & drop anywhere over the conversation pane. The listeners are wired
+    // once (convEl persists across openConv) and routed to the live composer.
+    currentSetPending = setPending;
+    wireDropZoneOnce();
+
+    // Paste an image (or any file) straight from the clipboard.
+    ta.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const it of items) {
+        if (it.kind === 'file') {
+          const file = it.getAsFile();
+          if (file) { e.preventDefault(); setPending(file); break; }
+        }
+      }
+    });
+
+    // Enter to send, Shift+Enter for newline.
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+    });
+
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const text = ta.value.trim();
+      if (!text && !pendingFile) return;
+      let attachment = null;
+      if (pendingFile) {
+        if (pendingFile.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
+        try { attachment = { data_url: await readAsDataURL(pendingFile), name: pendingFile.name }; }
+        catch (ex) { toast('Could not read that file.'); return; }
+      }
+      sendBtn.disabled = true; ta.disabled = true;
+      const hadFile = !!pendingFile;
+      if (hadFile) sendBtn.textContent = 'Sending…';
+      try {
+        const { message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: text, attachment } });
+        ta.value = '';
+        clearPending();
+        appendLiveMessage(message);
+        loadThreads();
+      } catch (ex) {
+        toast(ex.message || 'Could not send the message.');
+      } finally {
+        sendBtn.disabled = false; ta.disabled = false; sendBtn.textContent = 'Send';
+        ta.focus();
+      }
+    };
   }
 
   // ===== Realtime: live incoming/outgoing messages =====
