@@ -83,11 +83,15 @@ async function api(path, { method = 'GET', body, _retried = false } = {}) {
   // Enforce idle timeout before every request
   if (Session.isExpired()) { await signOut('Session expired due to inactivity.'); throw new Error('Session expired'); }
 
+  // FormData (binary uploads) must NOT be JSON-stringified, and we must let the
+  // browser set the multipart Content-Type (with its boundary) itself.
+  const isForm = (typeof FormData !== 'undefined') && body instanceof FormData;
+
   // Auth travels in the httpOnly cookie — `credentials: 'include'` sends it.
   const res = await fetch(path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    headers: isForm ? undefined : { 'Content-Type': 'application/json' },
+    body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
     credentials: 'include',
   });
   let data = {};

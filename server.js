@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const DOMPurify = require('isomorphic-dompurify');
+const multer = require('multer');
 const { Pool } = require('pg');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -1482,18 +1483,31 @@ function sanitizeFilename(name) {
   const clean = name.replace(/[\r\n]/g, ' ').replace(/[^\w.\- ]+/g, '_').trim().slice(0, 120);
   return clean || null;
 }
-// Validate a base64 data URL, enforce type + size, upload to storage, return
-// { url, type, name, size } — or throws an { status, message } shaped error.
-async function storeChatAttachment(att, fromId, toId) {
-  const m = String(att.data_url || '').match(/^data:([\w.+-]+\/[\w.+-]+);base64,(.+)$/);
-  if (!m) throw { status: 400, message: 'Invalid attachment' };
-  const mime = m[1].toLowerCase();
+// In-memory multipart parser for chat attachments. memoryStorage keeps the file
+// as a Buffer (we forward it straight to Supabase Storage), capped at 5 MB so a
+// hostile client can't exhaust memory. Errors are translated to clean JSON.
+const attachUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ATTACH_MAX_BYTES, files: 1 },
+});
+function uploadAttachment(req, res, next) {
+  attachUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Attachment too large (max 5 MB)' });
+      return res.status(400).json({ error: 'Upload failed' });
+    }
+    next();
+  });
+}
+// Validate type + size, upload the raw bytes to storage, and return
+// { url, type, name, size } — or throw an { status, message } shaped error.
+async function storeChatBuffer(buf, mime, originalName, fromId, toId) {
+  mime = String(mime || '').toLowerCase();
   const ext = ATTACH_MIME_EXT[mime];
   if (!ext) throw { status: 415, message: 'Unsupported file type' };
-  const buf = Buffer.from(m[2], 'base64');
-  if (!buf.length) throw { status: 400, message: 'Empty attachment' };
+  if (!buf || !buf.length) throw { status: 400, message: 'Empty attachment' };
   if (buf.length > ATTACH_MAX_BYTES) throw { status: 413, message: 'Attachment too large (max 5 MB)' };
-  const name = sanitizeFilename(att.name) || `file.${ext}`;
+  const name = sanitizeFilename(originalName) || `file.${ext}`;
   const key = `chat/${fromId}_${toId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
   let url;
   if (storage.enabled()) {
@@ -1506,6 +1520,13 @@ async function storeChatAttachment(att, fromId, toId) {
     url = `/uploads/${local}`;
   }
   return { url, type: mime, name, size: buf.length };
+}
+// Backwards-compatible base64 data-URL path (clipboard paste fallback / old
+// clients). Decodes to a Buffer then reuses storeChatBuffer.
+async function storeChatAttachment(att, fromId, toId) {
+  const m = String(att.data_url || '').match(/^data:([\w.+-]+\/[\w.+-]+);base64,(.+)$/);
+  if (!m) throw { status: 400, message: 'Invalid attachment' };
+  return storeChatBuffer(Buffer.from(m[2], 'base64'), m[1], att.name, fromId, toId);
 }
 function messageDTO(m) {
   return {
@@ -1589,7 +1610,7 @@ app.post('/api/messages/:userId/read', authRequired, wrap(async (req, res) => {
   res.json({ ok: true, updated: upd.rowCount });
 }));
 
-app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
+app.post('/api/messages/:userId', authRequired, uploadAttachment, wrap(async (req, res) => {
   const other = Number(req.params.userId);
   const u = await findUser(other);
   if (!u) return res.status(404).json({ error: 'User not found' });
@@ -1597,14 +1618,18 @@ app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const text = (content || '').trim();
 
   let att = null;
-  if (attachment && attachment.data_url) {
-    try {
+  try {
+    if (req.file) {
+      // Preferred path: raw binary via multipart/form-data (no base64 bloat).
+      att = await storeChatBuffer(req.file.buffer, req.file.mimetype, req.file.originalname, req.user.id, other);
+    } else if (attachment && attachment.data_url) {
+      // Fallback path: base64 data URL (older clients / clipboard paste).
       att = await storeChatAttachment(attachment, req.user.id, other);
-    } catch (e) {
-      if (e && e.status) return res.status(e.status).json({ error: e.message });
-      console.error('Attachment upload failed:', e && e.message);
-      return res.status(502).json({ error: 'Upload failed' });
     }
+  } catch (e) {
+    if (e && e.status) return res.status(e.status).json({ error: e.message });
+    console.error('Attachment upload failed:', e && e.message);
+    return res.status(502).json({ error: 'Upload failed' });
   }
   if (!text && !att) return res.status(400).json({ error: 'Content required' });
 

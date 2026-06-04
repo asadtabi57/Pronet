@@ -404,13 +404,18 @@
       clearPending();
       ta.focus();
 
-      let attachment = null;
-      if (file) {
-        try { attachment = { data_url: await readAsDataURL(file), name: file.name }; }
-        catch (ex) { failOptimistic(tempId, 'Could not read that file.'); return; }
-      }
       try {
-        const { message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: text, attachment } });
+        let message;
+        if (file) {
+          // Send the raw bytes as multipart/form-data — no base64 (~33% smaller
+          // upload, no encode/decode cost on either end).
+          const fd = new FormData();
+          fd.append('content', text);
+          fd.append('file', file, file.name);
+          ({ message } = await api(`/api/messages/${userId}`, { method: 'POST', body: fd }));
+        } else {
+          ({ message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: text } }));
+        }
         reconcileOptimistic(tempId, message);
         loadThreads();
       } catch (ex) {
