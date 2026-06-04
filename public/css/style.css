@@ -6,11 +6,11 @@
 
 /* ---------- Design tokens ---------- */
 :root {
-  /* Brand */
-  --brand:        #0a66c2;
-  --brand-hover:  #084d93;
-  --brand-soft:   #e8f0fa;
-  --brand-ring:   rgba(10, 102, 194, 0.18);
+  /* Brand — Deep Indigo */
+  --brand:        #4f46e5;
+  --brand-hover:  #4338ca;
+  --brand-soft:   #eef2ff;
+  --brand-ring:   rgba(79, 70, 229, 0.18);
 
   /* Accents */
   --pink:         #fadcd9;
@@ -18,6 +18,11 @@
   --red:          #b91c1c;
   --amber:        #b45309;
   --gold:         #d97706;
+
+  /* Mint / Violet — vibrant status + active accents */
+  --mint:         #10b981;
+  --mint-soft:    #d1fae5;
+  --violet:       #7c3aed;
 
   /* Neutrals (cool slate) */
   --ink:          #0b1220;   /* primary text */
@@ -27,8 +32,8 @@
   --line:         #e6e8ec;   /* hairline border */
   --line-2:       #eef0f3;   /* very soft divider */
   --hover:        #f1f3f7;   /* subtle hover bg */
-  --bg-app:       #f3f4f6;   /* page bg */
-  --bg-app-2:     #eef0f4;   /* page bg cooler */
+  --bg-app:       #f5f6fc;   /* page bg — faint indigo tint */
+  --bg-app-2:     #eef0f8;   /* page bg cooler */
   --card:         #ffffff;
 
   /* Elevation — soft, layered, modern */
@@ -37,14 +42,17 @@
   --shadow-md:    0 4px 14px -4px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
   --shadow-lg:    0 12px 32px -8px rgba(15, 23, 42, 0.14), 0 4px 12px rgba(15, 23, 42, 0.06);
   --shadow-pop:   0 18px 48px -12px rgba(15, 23, 42, 0.22), 0 6px 16px rgba(15, 23, 42, 0.08);
+  /* Ambient — borderless "floating card" elevation */
+  --shadow-ambient: 0 8px 30px rgba(15, 23, 42, 0.05);
 
-  /* Radii */
-  --r-sm:  6px;
-  --r-md:  10px;
-  --r-lg:  14px;
-  --r-xl:  18px;
-  --r-2xl: 22px;
+  /* Radii — softer, "squircle" feel */
+  --r-sm:  8px;
+  --r-md:  12px;
+  --r-lg:  18px;
+  --r-xl:  24px;
+  --r-2xl: 30px;
   --r-pill: 999px;
+  --r-squircle: 30%;   /* avatars & square tiles */
 
   /* Type scale */
   --fs-11: 11px;
@@ -215,13 +223,13 @@ button:focus-visible, a:focus-visible {
 /* ---------- Avatar ---------- */
 .avatar {
   position: relative;
-  border-radius: 50%; color: #fff;
+  border-radius: var(--r-squircle); color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
   font-weight: 700; flex-shrink: 0; overflow: visible;
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04);
 }
 .avatar.img { background: #e2e8f0; }
-.avatar.img img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.avatar.img img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .avatar.xs { width: 24px; height: 24px; font-size: 10px; }
 .avatar.sm { width: 32px; height: 32px; font-size: 13px; }
 .avatar.md { width: 48px; height: 48px; font-size: 16px; }
@@ -233,7 +241,7 @@ button:focus-visible, a:focus-visible {
   position: absolute; bottom: 0; right: 0;
   width: 30%; height: 30%; min-width: 8px; min-height: 8px;
   max-width: 18px; max-height: 18px;
-  background: #22c55e; border: 2px solid #fff; border-radius: 50%;
+  background: var(--mint); border: 2px solid #fff; border-radius: 50%;
   box-sizing: border-box; display: none; pointer-events: none;
 }
 .avatar.is-online .presence-dot { display: block; }
@@ -403,15 +411,16 @@ body.app {
   gap: 2px; min-width: 64px;
   border-bottom: 2px solid transparent;
   position: relative; text-decoration: none;
-  border-radius: 8px 8px 0 0;
+  border-radius: 12px;
   transition: color var(--t-fast), background var(--t-fast),
               border-color var(--t-fast);
 }
 .nav-tab .icon { font-size: 20px; line-height: 1; }
 .nav-tab:hover { color: var(--ink); background: var(--hover); }
 .nav-tab.active {
-  color: var(--ink);
-  border-bottom-color: var(--ink);
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-bottom-color: transparent;
 }
 .nav-tab .badge {
   position: absolute; top: 2px; right: 8px;
@@ -493,13 +502,13 @@ body.app {
 /* ---------- Card ---------- */
 .card {
   background: var(--card);
-  border: 1px solid var(--line);
+  border: none;
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-ambient);
   overflow: hidden;
-  transition: box-shadow var(--t-fast), border-color var(--t-fast);
+  transition: box-shadow var(--t-base), transform var(--t-base);
 }
-.card:hover { box-shadow: var(--shadow-md); }
+.card:hover { box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08); }
 .card-pad { padding: 18px 22px; }
 
 /* ---------- Sidebar Profile Card ---------- */
@@ -728,7 +737,7 @@ body.app {
   background: linear-gradient(135deg, #fadcd9 0%, #c7d8ff 100%);
 }
 .person-card .pc-avatar {
-  margin-top: -36px; border: 3px solid #fff; border-radius: 50%;
+  margin-top: -36px; border: 3px solid #fff; border-radius: var(--r-squircle);
 }
 .person-card .pc-body {
   padding: 8px 14px 14px;
@@ -877,7 +886,7 @@ body.app {
 .msg-thread .unread-dot {
   width: 10px; height: 10px; background: var(--brand);
   border-radius: 50%; align-self: center; flex-shrink: 0;
-  box-shadow: 0 0 0 3px rgba(10, 102, 194, 0.18);
+  box-shadow: 0 0 0 3px var(--brand-ring);
 }
 
 .msg-conv {
@@ -889,7 +898,10 @@ body.app {
 .msg-conv-head {
   padding: 14px 22px; border-bottom: 1px solid var(--line);
   display: flex; gap: 12px; align-items: center;
-  background: var(--card); min-width: 0;
+  background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  min-width: 0;
 }
 .msg-conv-head .spacer { flex: 1; }
 .conv-head-info { min-width: 0; overflow: hidden; }
@@ -948,7 +960,7 @@ body.app {
 .msg-ticks.read { color: #3b82f6; }
 /* Online / last-seen line under the peer's name + headline in the chat header. */
 .conv-status { color: var(--muted); font-size: 11px; margin-top: 1px; }
-.conv-status.online { color: #16a34a; font-weight: 600; }
+.conv-status.online { color: var(--mint); font-weight: 600; }
 .comment-actions { margin-top: 4px; font-size: var(--fs-12); }
 .comment-edit { margin-top: 6px; }
 .m-edit-box { margin-top: 6px; }
@@ -965,7 +977,10 @@ body.app {
 
 .msg-form {
   padding: 14px 18px; border-top: 1px solid var(--line);
-  display: flex; gap: 10px; background: var(--card);
+  display: flex; gap: 10px;
+  background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
   flex-shrink: 0;
 }
 .msg-form textarea {
@@ -1288,7 +1303,7 @@ body.app {
 }
 .sd-row:hover, .sd-row.active { background: var(--hover); }
 .sd-avatar {
-  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  width: 36px; height: 36px; border-radius: var(--r-squircle); flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
   color: #fff; font-weight: 700; font-size: var(--fs-13); overflow: hidden;
 }
@@ -1317,7 +1332,7 @@ body.app {
   display: flex; gap: 16px; align-items: center; margin-bottom: 18px;
 }
 .avatar-uploader .preview {
-  width: 88px; height: 88px; border-radius: 50%;
+  width: 88px; height: 88px; border-radius: var(--r-squircle);
   background: var(--hover); overflow: hidden;
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; color: #fff; font-size: 24px; flex-shrink: 0;
@@ -1665,7 +1680,7 @@ body.app {
   height: min(80vw, 80vh);
   max-width: 90vw; max-height: 85vh;
   min-width: 288px; min-height: 288px;
-  object-fit: cover; border-radius: 50%;
+  object-fit: cover; border-radius: var(--r-2xl);
   box-shadow: 0 25px 80px rgba(0, 0, 0, 0.7),
               0 0 0 4px rgba(255, 255, 255, 0.08);
   transform: scale(0.85); opacity: 0;
@@ -1828,7 +1843,7 @@ body.app {
   border-radius: 999px; font-size: 13px; font-variant-numeric: tabular-nums;
 }
 .call-avatar {
-  width: 110px; height: 110px; border-radius: 50%; overflow: hidden;
+  width: 110px; height: 110px; border-radius: var(--r-squircle); overflow: hidden;
   display: flex; align-items: center; justify-content: center;
   background: #1f2a3a;
 }
@@ -1861,17 +1876,33 @@ body.app {
 .call-incoming {
   position: fixed; inset: 0; z-index: 10001;
   display: none; align-items: center; justify-content: center;
-  background: rgba(8, 12, 20, 0.5);
-  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  background: rgba(8, 12, 20, 0.55);
+  -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%);
 }
 .call-incoming.open { display: flex; }
 .call-incoming-card {
-  width: min(340px, 92vw); background: #fff; border-radius: 18px;
+  width: min(340px, 92vw);
+  background: rgba(255,255,255,0.85);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border-radius: var(--r-2xl);
   padding: 28px 22px; text-align: center;
   box-shadow: 0 24px 70px rgba(0,0,0,0.35);
   animation: fpIn 220ms cubic-bezier(0.16,1,0.3,1);
 }
-.call-incoming-card .call-avatar { margin: 0 auto 14px; }
+.call-incoming-card .call-avatar {
+  margin: 0 auto 14px; position: relative; z-index: 1;
+}
+.call-incoming-card .call-avatar::before,
+.call-incoming-card .call-avatar::after {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  border-radius: inherit; background: var(--brand-ring);
+  animation: callPulse 1.6s cubic-bezier(0,0,0.2,1) infinite;
+}
+.call-incoming-card .call-avatar::after { animation-delay: 0.8s; }
+@keyframes callPulse {
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
 .inc-name { font-size: 19px; font-weight: 700; color: #0f172a; }
 .inc-sub { color: #64748b; font-size: 14px; margin-top: 4px; margin-bottom: 22px; }
 .inc-actions { display: flex; gap: 16px; justify-content: center; }
@@ -1966,7 +1997,7 @@ body.app {
   background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.25);
   transition: transform 0.16s ease;
 }
-.pn-toggle.on { background: var(--brand); }
+.pn-toggle.on { background: var(--mint); }
 .pn-toggle.on .pn-knob { transform: translateX(18px); }
 
 /* Action rows (view profile / change pw / delete / sign out) */
