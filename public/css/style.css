@@ -1636,13 +1636,27 @@ body.app {
   object-fit: contain; background: #0b1623;
 }
 .call-remote-audio {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 16px; color: #fff;
+  position: absolute; inset: auto; right: 16px; bottom: 16px; left: auto; top: auto;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; color: #fff;
+  padding: 12px 14px; border-radius: 14px;
+  background: rgba(8, 12, 20, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  max-width: 45%; z-index: 2;
 }
+/* Lifted above the local self-view PiP when both happen to be visible
+   (e.g. a video call where the peer has no camera). */
+.call-remote-audio.stacked { bottom: 148px; }
+/* Keep the peer avatar compact and tucked in the lower-right for every call
+   type (audio, video, screen share) on both desktop and mobile, so it never
+   covers an incoming camera feed or shared screen. */
+.call-remote-audio .call-avatar { width: 64px; height: 64px; }
+.call-remote-audio .call-peer-name { font-size: 13px; font-weight: 700; }
 /* The `hidden` attribute is set by calls.js whenever the remote stream carries
  any video (camera OR screen share). Without this rule the author `display:flex`
- above beats the UA `[hidden]` style, so the centered avatar would otherwise
- stay painted on top of the shared screen. */
+ above beats the UA `[hidden]` style, so the avatar would otherwise stay
+ painted on top of the shared screen. */
 .call-remote-audio[hidden] { display: none !important; }
 .call-peer-name { font-size: 22px; font-weight: 700; }
 .call-local {
@@ -1733,6 +1747,8 @@ body.app {
 @media (max-width: 600px) {
   .call-window { width: 100vw; height: 100vh; height: 100dvh; max-width: 100vw; border-radius: 0; }
   .call-local { width: 110px; height: 76px; right: 10px; bottom: 10px; }
+  .call-remote-audio { right: 10px; bottom: 10px; }
+  .call-remote-audio.stacked { bottom: 96px; }
   .call-controls { gap: 12px; }
   .call-ctrl .ci { width: 48px; height: 48px; font-size: 20px; }
 }

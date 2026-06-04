@@ -148,23 +148,54 @@
     return navigator.mediaDevices.getUserMedia(constraints);
   }
 
+  function syncRemoteMedia() {
+    const remote = document.getElementById('call-remote');
+    const overlay = document.getElementById('call-remote-audio');
+    if (!remote || !overlay) return;
+    // Decide purely on whether the peer is actually delivering a live video
+    // track. Reading the receivers (and live tracks of the remote stream) is
+    // immune to ontrack firing order, so the centered avatar can never stay
+    // painted over an incoming camera/screen feed.
+    let hasVideo = false;
+    if (state.pc && typeof state.pc.getReceivers === 'function') {
+      state.pc.getReceivers().forEach(r => {
+        if (r.track && r.track.kind === 'video' && r.track.readyState === 'live' && !r.track.muted) hasVideo = true;
+      });
+    }
+    if (!hasVideo && state.remoteStream) {
+      hasVideo = state.remoteStream.getVideoTracks().some(t => t.readyState === 'live' && !t.muted);
+    }
+    remote.hidden = !hasVideo;
+    overlay.hidden = hasVideo;
+    // When the peer avatar card is visible, lift it above the local self-view
+    // PiP if that PiP is also on screen so the two don't overlap in the corner.
+    const localPip = document.getElementById('call-local');
+    const localVisible = localPip && !localPip.hidden;
+    overlay.classList.toggle('stacked', !hasVideo && !!localVisible);
+  }
+
   function createPeer() {
     const pc = new RTCPeerConnection(ICE_CONFIG);
     state.remoteStream = new MediaStream();
     pc.ontrack = (ev) => {
       ev.streams[0].getTracks().forEach(tr => state.remoteStream.addTrack(tr));
-      const rv = document.getElementById('call-remote');
-      rv.srcObject = state.remoteStream;
-      const hasVideo = state.remoteStream.getVideoTracks().length > 0;
-      document.getElementById('call-remote').hidden = !hasVideo;
-      document.getElementById('call-remote-audio').hidden = hasVideo;
+      document.getElementById('call-remote').srcObject = state.remoteStream;
+      const track = ev.track;
+      if (track) {
+        // A video track often arrives muted and unmutes a beat later; re-sync
+        // on every state change so the avatar overlay tracks reality.
+        track.onunmute = syncRemoteMedia;
+        track.onmute = syncRemoteMedia;
+        track.onended = syncRemoteMedia;
+      }
+      syncRemoteMedia();
     };
     pc.onicecandidate = (ev) => { if (ev.candidate) signal('ice_candidate', ev.candidate); };
     pc.onconnectionstatechange = () => {
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
         if (pc.connectionState === 'failed') endCall(true);
       }
-      if (pc.connectionState === 'connected') setStatus('Connected');
+      if (pc.connectionState === 'connected') { setStatus('Connected'); syncRemoteMedia(); }
     };
     // local tracks
     state.localStream.getTracks().forEach(tr => pc.addTrack(tr, state.localStream));
