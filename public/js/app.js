@@ -251,6 +251,8 @@ window.RT = RT;
 const Presence = (() => {
   const online = new Set();
   let seeded = false;
+  const seedCbs = [];
+  function onSeed(fn) { if (typeof fn === 'function') seedCbs.push(fn); }
 
   function refreshDom(id) {
     const sel = id != null ? `.avatar[data-uid="${id}"]` : '.avatar[data-uid]';
@@ -267,6 +269,7 @@ const Presence = (() => {
       (r.online || []).forEach(id => online.add(Number(id)));
       seeded = true;
       refreshDom();
+      seedCbs.forEach(fn => { try { fn(); } catch (e) {} });
     } catch (e) { /* not fatal; transitions still update the set */ }
   }
 
@@ -285,7 +288,7 @@ const Presence = (() => {
     seed();
   }
 
-  return { start, seed, isOnline, refreshDom, _set: online, get seeded() { return seeded; } };
+  return { start, seed, isOnline, refreshDom, onSeed, _set: online, get seeded() { return seeded; } };
 })();
 window.Presence = Presence;
 

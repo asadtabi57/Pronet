@@ -124,7 +124,7 @@
   // "Active now" if online, otherwise "last seen 5m ago".
   function statusText(user) {
     if (!user) return '';
-    if (window.Presence && Presence.isOnline(user.id)) return 'Active now';
+    if (isUserOnline(user)) return 'Active now';
     if (user.last_seen) return 'last seen ' + timeAgo(user.last_seen);
     return '';
   }
@@ -139,6 +139,14 @@
     const online = isUserOnline(user);
     el.textContent = statusText(user);
     el.classList.toggle('online', online);
+  }
+  // The header renders before presence may have finished seeding (common on
+  // mobile, where the SSE/presence fetch can resolve a beat later). Re-render the
+  // status line once presence seeds (and on every re-seed after a reconnect) so
+  // "Active now" / "last seen …" is always accurate instead of stuck on a stale
+  // value.
+  if (window.Presence && Presence.onSeed) {
+    Presence.onSeed(() => { if (activeUser) renderStatusLine(activeUser); });
   }
   // Flip every outgoing bubble's tick to the blue double "seen" state.
   function markOutgoingSeen() {
@@ -282,7 +290,7 @@
       body.innerHTML = '<div class="empty">No messages yet — say hi 👋</div>';
     } else {
       messages.forEach(m => seen.add(m.id));
-      body.innerHTML = messages.map(bubbleHTML).join('');
+      body.innerHTML = messages.map(m => bubbleHTML(m)).join('');
       scrollConvToBottom();
     }
     loadCallLogs(userId);
