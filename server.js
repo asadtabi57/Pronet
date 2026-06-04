@@ -477,14 +477,14 @@ const BUILD_ID = Date.now().toString(36);
 const fsSync = require('fs');
 // Auto-version CSS/JS in HTML so browsers always pick up the latest after deploy
 const htmlCache = new Map();
-app.get(/\.html$/, (req, res, next) => {
-  const filePath = path.join(__dirname, 'public', req.path);
+function serveVersionedHtml(req, res, next, fileName) {
+  const filePath = path.join(__dirname, 'public', fileName || req.path);
   const cacheKey = filePath + ':' + BUILD_ID;
   let html = htmlCache.get(cacheKey);
   if (!html) {
     try {
       html = fsSync.readFileSync(filePath, 'utf8');
-    } catch (e) { return next(); }
+    } catch (e) { return next ? next() : res.status(404).end(); }
     html = html.replace(/(src|href)="(\/[^"]+\.(?:css|js))"/g, `$1="$2?v=${BUILD_ID}"`);
     htmlCache.set(cacheKey, html);
   }
@@ -493,12 +493,18 @@ app.get(/\.html$/, (req, res, next) => {
   res.setHeader('Expires', '0');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
-});
+}
+// Entry point: '/' must be versioned too, otherwise its <script src="/js/app.js">
+// is loaded unversioned and gets the aggressive 7-day cache — which is exactly
+// why returning (non-incognito) browsers kept running stale app.js.
+app.get('/', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'));
+app.get(/\.html$/, (req, res, next) => serveVersionedHtml(req, res, next));
 
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
   lastModified: true,
   maxAge: '7d',
+  index: false, // never serve raw, unversioned index.html for '/'
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
@@ -1815,7 +1821,7 @@ app.use((err, req, res, next) => {
 });
 
 // SPA fallback
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'));
 
 (async () => {
   try {
