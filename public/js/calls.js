@@ -241,7 +241,10 @@
     const screenBtn = document.getElementById('ctrl-screen');
     const isVideo = callType === 'video';
     camBtn.style.display = isVideo ? '' : 'none';
-    screenBtn.style.display = isVideo ? '' : 'none';
+    // Hide the screen-share button entirely where the browser can't capture a
+    // display surface (most phones) so users aren't offered a dead control.
+    const canShare = navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function';
+    screenBtn.style.display = (isVideo && canShare) ? '' : 'none';
     document.getElementById('ctrl-mute').classList.toggle('off', false);
   }
 
@@ -378,10 +381,23 @@
     const sender = state.pc.getSenders().find(s => s.track && s.track.kind === 'video');
     if (!sender) { toast('Screen share needs a video call.'); return; }
     if (!state.sharing) {
+      // Most mobile browsers (iOS Safari, most Android Chrome) do not expose
+      // getDisplayMedia, so screen sharing simply isn't available there.
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+        toast('Screen sharing isn\u2019t supported on this device or browser.');
+        return;
+      }
       let screen;
       try {
         screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      } catch (e) { return; /* user cancelled */ }
+      } catch (e) {
+        // NotAllowedError from a real picker = user cancelled (stay silent).
+        // Anything else (NotSupportedError, etc.) = surface a hint.
+        if (e && e.name && e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
+          toast('Screen sharing isn\u2019t available on this device.');
+        }
+        return;
+      }
       state.screenStream = screen;
       const screenTrack = screen.getVideoTracks()[0];
       state.cameraTrack = sender.track;

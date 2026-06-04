@@ -858,9 +858,13 @@ body.app {
 .msg-conv-head {
   padding: 14px 22px; border-bottom: 1px solid var(--line);
   display: flex; gap: 12px; align-items: center;
-  background: var(--card);
+  background: var(--card); min-width: 0;
 }
 .msg-conv-head .spacer { flex: 1; }
+.conv-head-info { min-width: 0; overflow: hidden; }
+.conv-head-info > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-conv-head .avatar { flex-shrink: 0; }
+.conv-head-actions { flex-shrink: 0; }
 
 .msg-conv-body {
   flex: 1; min-height: 0; overflow-y: auto; padding: 20px 22px;
@@ -1314,6 +1318,17 @@ body.app {
   .person-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .modal-content { margin: 16px; padding: 20px; }
   .section-title { font-size: var(--fs-16); padding: 0 4px; }
+
+  /* Keep the chat header on one tidy row on narrow phones — tighter padding,
+     smaller gaps, and a compact "View profile" link so nothing overflows. */
+  .msg-conv-head { padding: 10px 12px; gap: 8px; }
+  .msg-conv-head .spacer { display: none; }
+  .conv-head-info { flex: 1; }
+  .conv-head-actions { gap: 2px; }
+  .call-icon-btn { width: 36px; height: 36px; margin-right: 0; }
+  .msg-conv-head .btn-tiny {
+    flex-shrink: 0; padding: 6px 8px; font-size: 12px; white-space: nowrap;
+  }
 }
 
 /* Back button (visible only on mobile via media query above) */
@@ -1624,6 +1639,11 @@ body.app {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 16px; color: #fff;
 }
+/* The `hidden` attribute is set by calls.js whenever the remote stream carries
+ any video (camera OR screen share). Without this rule the author `display:flex`
+ above beats the UA `[hidden]` style, so the centered avatar would otherwise
+ stay painted on top of the shared screen. */
+.call-remote-audio[hidden] { display: none !important; }
 .call-peer-name { font-size: 22px; font-weight: 700; }
 .call-local {
   position: absolute; right: 16px; bottom: 16px;
