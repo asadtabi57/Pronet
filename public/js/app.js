@@ -369,6 +369,10 @@ async function renderNav(activeTab) {
     unreadNotif = n.unread || 0;
     unreadMsgs = (t.threads || []).reduce((sum, x) => sum + (x.unread || 0), 0);
   } catch (e) {}
+  // Seed the realtime badge counters from the values we just fetched so the
+  // initial bootstrap doesn't need a second (duplicate) round-trip.
+  window.__unreadNotif = unreadNotif;
+  window.__unreadMsgs  = unreadMsgs;
 
   const tabs = [
     { id: 'home', label: 'Home', icon: '🏠', href: '/feed.html' },
@@ -453,11 +457,11 @@ async function renderNav(activeTab) {
       window.setNavBadge('messages.html', window.__unreadMsgs);
     });
 
-    refreshBadges();
-    // Fallback poll (covers missed SSE events / multi-instance). 60s is plenty now.
+    // Badges were already rendered from the initial fetch above and the realtime
+    // counters seeded, so no immediate refresh is needed here. Just keep a slow
+    // fallback poll to catch any missed SSE events / multi-instance drift.
     setInterval(refreshBadges, 60000);
   }
-
   // NOTE: The previous scroll-direction sidebar-collapse behaviour was removed.
   // Collapsing the sidebars on scroll changed the page height, which re-triggered
   // the scroll event and caused the desktop layout to shake/oscillate. The layout
