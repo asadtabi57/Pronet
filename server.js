@@ -1788,7 +1788,23 @@ async function storeChatAttachment(att, fromId, toId) {
   if (!m) throw { status: 400, message: 'Invalid attachment' };
   return storeChatBuffer(Buffer.from(m[2], 'base64'), m[1], att.name, fromId, toId);
 }
-function messageDTO(m) {
+// Aggregate raw reaction rows ([{emoji,user_id}, …]) into a compact list the
+// client can render directly: [{emoji, count, user_ids:[…]}], newest-emoji last.
+function reactionsDTO(rows) {
+  if (!rows || !rows.length) return [];
+  const map = new Map();
+  for (const r of rows) {
+    const e = r.emoji;
+    if (!e) continue;
+    if (!map.has(e)) map.set(e, { emoji: e, count: 0, user_ids: [] });
+    const o = map.get(e);
+    o.count += 1;
+    o.user_ids.push(Number(r.user_id));
+  }
+  return Array.from(map.values());
+}
+
+function messageDTO(m, reactions) {
   const dto = {
     id: Number(m.id), from_id: Number(m.from_id), to_id: Number(m.to_id),
     content: m.content,
@@ -1798,7 +1814,23 @@ function messageDTO(m) {
       name: m.attachment_name || '', size: m.attachment_size != null ? Number(m.attachment_size) : null,
     } : null,
     created_at: Number(m.created_at), read: m.read, edited: m.edited ? 1 : 0,
+    reactions: Array.isArray(reactions) ? reactions : [],
   };
+  // Quoted message preview (reply feature). `reply_to` may be attached directly
+  // (POST handler builds it), otherwise it's reconstructed from rt_* columns that
+  // a LEFT JOIN on the parent message + its author provides.
+  if (m.reply_to) {
+    dto.reply_to = m.reply_to;
+  } else if (m.reply_to_id) {
+    dto.reply_to = {
+      id: Number(m.reply_to_id),
+      from_id: m.rt_from_id != null ? Number(m.rt_from_id) : null,
+      from_name: m.rt_from_name || null,
+      content: m.rt_content || '',
+      attachment_type: m.rt_attachment_type || null,
+      deleted: m.rt_from_id == null,
+    };
+  }
   // When a post was shared into the DM, surface a small preview so the client
   // can render a clickable post-reference card (author + snippet + permalink)
   // instead of dumping the raw post text. sp_* columns come from a LEFT JOIN.
@@ -1856,11 +1888,15 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
     publicUsersByIds([other], req.user.id),
     q(`SELECT m.id, m.from_id, m.to_id, m.content, m.attached_post_id,
               m.attachment_url, m.attachment_type, m.attachment_name, m.attachment_size,
-              m.created_at, m.read, m.edited,
+              m.created_at, m.read, m.edited, m.reply_to_id,
+              rt.from_id AS rt_from_id, rt.content AS rt_content, rt.attachment_type AS rt_attachment_type,
+              rtu.name AS rt_from_name,
               sp.content AS sp_content, spu.name AS sp_author_name
          FROM messages m
          LEFT JOIN posts sp ON sp.id = m.attached_post_id
          LEFT JOIN users spu ON spu.id = sp.user_id
+         LEFT JOIN messages rt ON rt.id = m.reply_to_id
+         LEFT JOIN users rtu ON rtu.id = rt.from_id
         WHERE (m.from_id = $1 AND m.to_id = $2) OR (m.from_id = $2 AND m.to_id = $1)
         ORDER BY m.created_at ASC`, [req.user.id, other]),
     q(`UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`, [other, req.user.id]),
@@ -1872,7 +1908,19 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   if (upd && upd.rowCount > 0) {
     sseSend(other, 'message', { action: 'read', by: req.user.id });
   }
-  const messages = r.rows.map(messageDTO);
+  // Batch-load every reaction for this thread in one query, then bucket by
+  // message id so each DTO carries its own aggregated reactions.
+  const ids = r.rows.map(row => Number(row.id));
+  const byMsg = new Map();
+  if (ids.length) {
+    const rx = await q(`SELECT message_id, emoji, user_id FROM message_reactions WHERE message_id = ANY($1::bigint[])`, [ids]);
+    for (const row of rx.rows) {
+      const k = Number(row.message_id);
+      if (!byMsg.has(k)) byMsg.set(k, []);
+      byMsg.get(k).push(row);
+    }
+  }
+  const messages = r.rows.map(row => messageDTO(row, reactionsDTO(byMsg.get(Number(row.id)))));
   res.json({ user: userDTO, messages });
 }));
 
@@ -1897,6 +1945,28 @@ app.post('/api/messages/:userId', authRequired, uploadAttachment, wrap(async (re
   const { content, attachment } = req.body || {};
   const text = (content || '').trim();
 
+  // Optional reply target. Only allow quoting a message that belongs to THIS
+  // conversation (between the two participants) so a reply can't reference an
+  // unrelated/foreign message. We also grab a small preview for the DTO/SSE.
+  let replyTo = null;
+  const replyToId = Number(req.body && req.body.reply_to_id) || 0;
+  if (replyToId) {
+    const rr = await q(
+      `SELECT m.id, m.from_id, m.content, m.attachment_type, u.name AS from_name
+         FROM messages m LEFT JOIN users u ON u.id = m.from_id
+        WHERE m.id = $1
+          AND ((m.from_id = $2 AND m.to_id = $3) OR (m.from_id = $3 AND m.to_id = $2))`,
+      [replyToId, req.user.id, other]
+    );
+    if (rr.rowCount) {
+      const rp = rr.rows[0];
+      replyTo = {
+        id: Number(rp.id), from_id: Number(rp.from_id), from_name: rp.from_name || null,
+        content: rp.content || '', attachment_type: rp.attachment_type || null,
+      };
+    }
+  }
+
   let att = null;
   try {
     if (req.file) {
@@ -1914,13 +1984,14 @@ app.post('/api/messages/:userId', authRequired, uploadAttachment, wrap(async (re
   if (!text && !att) return res.status(400).json({ error: 'Content required' });
 
   const ins = await q(
-    `INSERT INTO messages (from_id, to_id, content, attachment_url, attachment_type, attachment_name, attachment_size, created_at, read)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0) RETURNING *`,
+    `INSERT INTO messages (from_id, to_id, content, attachment_url, attachment_type, attachment_name, attachment_size, reply_to_id, created_at, read)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0) RETURNING *`,
     [req.user.id, other, sanitizeText(text), att ? att.url : null, att ? att.type : null,
-     att ? att.name : null, att ? att.size : null, Date.now()]
+     att ? att.name : null, att ? att.size : null, replyTo ? replyTo.id : null, Date.now()]
   );
   const m = ins.rows[0];
-  const dto = messageDTO(m);
+  if (replyTo) m.reply_to = replyTo;
+  const dto = messageDTO(m, []);
   // Respond to the sender immediately; the notification + realtime fan-out (for
   // the receiver and other tabs) don't need to block the HTTP response.
   res.json({ message: dto });
@@ -1973,6 +2044,58 @@ app.delete('/api/messages/:id', authRequired, wrap(async (req, res) => {
   sseSend(other, 'message', payload);
   sseSend(req.user.id, 'message', payload);
   res.json({ ok: true });
+}));
+
+// React to a message — WhatsApp-style: one emoji per user per message. Sending
+// the emoji you already reacted with removes it (toggle); a different emoji
+// replaces it. Sending an empty emoji clears your reaction. Either participant
+// in the conversation can react to any message in it.
+app.post('/api/messages/:id/react', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  let emoji = (req.body && req.body.emoji != null ? String(req.body.emoji) : '').trim();
+  // Guard against oversized/garbage input. A single emoji (even with ZWJ +
+  // skin-tone modifiers) stays well under 32 chars; reject HTML-ish payloads.
+  if (emoji.length > 32 || /[<>]/.test(emoji)) return res.status(400).json({ error: 'Invalid reaction' });
+
+  const r = await q(`SELECT from_id, to_id FROM messages WHERE id = $1`, [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const row = r.rows[0];
+  const from = Number(row.from_id), to = Number(row.to_id);
+  if (req.user.id !== from && req.user.id !== to) {
+    return res.status(403).json({ error: 'You are not part of this conversation.' });
+  }
+
+  let added = false;
+  if (!emoji) {
+    await q(`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2`, [id, req.user.id]);
+  } else {
+    const ex = await q(`SELECT emoji FROM message_reactions WHERE message_id = $1 AND user_id = $2`, [id, req.user.id]);
+    if (ex.rowCount && ex.rows[0].emoji === emoji) {
+      await q(`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2`, [id, req.user.id]);
+    } else {
+      await q(
+        `INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = EXCLUDED.created_at`,
+        [id, req.user.id, emoji, Date.now()]
+      );
+      added = true;
+    }
+  }
+
+  const all = await q(`SELECT emoji, user_id FROM message_reactions WHERE message_id = $1`, [id]);
+  const reactions = reactionsDTO(all.rows);
+  const other = req.user.id === from ? to : from;
+  const payload = { action: 'react', message_id: id, reactions };
+  sseSend(other, 'message', payload);
+  sseSend(req.user.id, 'message', payload);
+  res.json({ ok: true, reactions });
+
+  // Tell the message's author when someone else reacts to their message (only
+  // on add, never on remove, and never for self-reactions). Best-effort.
+  if (added && from !== req.user.id && req.user.id === to) {
+    notify(from, 'reaction', req.user.id, { message_id: id, emoji }).catch(() => {});
+  }
 }));
 
 // --- Notifications ---

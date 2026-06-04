@@ -14,6 +14,7 @@
     connect_accepted: 'accepted your connection request',
     new_post: 'shared a new post',
     message: 'sent you a message',
+    reaction: 'reacted to your message',
     profile_view: 'viewed your profile',
     profile_view_anon: 'viewed your profile',
   };
@@ -27,6 +28,7 @@
     connection_request: n => `/profile.html?id=${n.actor_id}`,
     connect_accepted: n => `/profile.html?id=${n.actor_id}`,
     message: n => `/messages.html?user=${n.actor_id}`,
+    reaction: n => `/messages.html?user=${n.actor_id}`,
     profile_view: n => `/profile.html?id=${n.actor_id}`,
   };
 

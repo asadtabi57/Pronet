@@ -97,6 +97,67 @@
       </a>`;
   }
 
+  // Small icon buttons that appear on each message for quick reply / react.
+  const ICON_REACT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
+  const ICON_REPLY = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
+
+  // Cache of rendered messages (id -> message), so replies and reactions can
+  // look up the original without re-fetching the thread.
+  const msgCache = new Map();
+  let replyTarget = null; // the message currently being replied to (or null)
+
+  // A short human label for an attachment-only message (used in reply previews).
+  function attachmentLabel(type) {
+    type = type || '';
+    if (type.startsWith('image/')) return '📷 Photo';
+    if (type.startsWith('video/')) return '🎬 Video';
+    if (type.startsWith('audio/')) return '🎵 Audio';
+    return '📎 Attachment';
+  }
+
+  // The quoted-message card rendered inside a bubble when it's a reply.
+  function replyQuoteHTML(m) {
+    if (!m.reply_to) return '';
+    const rt = m.reply_to;
+    const who = rt.from_id === me.id ? 'You'
+      : (rt.from_name || (activeUser && activeUser.name) || 'User');
+    let snippet = rt.content || '';
+    if (!snippet && rt.attachment_type) snippet = attachmentLabel(rt.attachment_type);
+    if (rt.deleted) snippet = 'Original message unavailable';
+    const snip = snippet ? escapeHTML(snippet.slice(0, 120)) : '(no text)';
+    return `<div class="reply-quote" data-target="${rt.id}">
+      <span class="rq-author">${escapeHTML(who)}</span>
+      <span class="rq-snippet">${snip}</span>
+    </div>`;
+  }
+
+  // Reaction pills (emoji + count). `mineReacted` highlights the pill you added.
+  function reactionPillsHTML(reactions) {
+    if (!reactions || !reactions.length) return '';
+    return reactions.map(r => {
+      const reacted = (r.user_ids || []).map(Number).includes(me.id);
+      return `<button type="button" class="reaction-pill${reacted ? ' mine' : ''}" data-emoji="${escapeHTML(r.emoji)}">
+        <span class="rp-emoji">${escapeHTML(r.emoji)}</span><span class="rp-count">${r.count}</span></button>`;
+    }).join('');
+  }
+
+  // Create/update/remove the reactions strip for a rendered message item.
+  function setReactions(item, reactions) {
+    if (!item) return;
+    const row = item.querySelector('.msg-row');
+    const mineMsg = row && row.classList.contains('from-me');
+    const html = reactionPillsHTML(reactions);
+    let box = item.querySelector('.msg-reactions');
+    if (!html) { if (box) box.remove(); return; }
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'msg-reactions ' + (mineMsg ? 'from-me' : 'from-them');
+      const meta = item.querySelector('.msg-meta');
+      item.insertBefore(box, meta);
+    }
+    box.innerHTML = html;
+  }
+
   function bubbleHTML(m, pending) {
     const mine = m.from_id === me.id;
     const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
@@ -117,12 +178,22 @@
     const postHTML = sharedPostHTML(m);
     const noteText = m.attached_post_id ? sharedNoteText(m) : m.content;
     const textHTML = noteText ? `<span class="m-text">${escapeHTML(noteText)}</span>` : '';
-    const attOnly = (attHTML || postHTML) && !textHTML ? ' att-only' : '';
+    const quoteHTML = replyQuoteHTML(m);
+    const attOnly = (attHTML || postHTML) && !textHTML && !quoteHTML ? ' att-only' : '';
+    // Reply / react affordances (need a real message id, so not on pending sends).
+    const hoverActions = pending ? '' : `<div class="msg-hover-actions">
+        <button type="button" class="mh-act mh-react" title="React" aria-label="React to message">${ICON_REACT}</button>
+        <button type="button" class="mh-act mh-reply" title="Reply" aria-label="Reply to message">${ICON_REPLY}</button>
+      </div>`;
+    const reactionsBox = (m.reactions && m.reactions.length)
+      ? `<div class="msg-reactions ${mine ? 'from-me' : 'from-them'}">${reactionPillsHTML(m.reactions)}</div>` : '';
     return `<div class="msg-item${pending ? ' sending' : ''}" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
-        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML || postHTML ? ' has-att' : ''}${attOnly}">${attHTML}${textHTML}${postHTML}</div>
+        <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML || postHTML ? ' has-att' : ''}${attOnly}">${quoteHTML}${attHTML}${textHTML}${postHTML}</div>
+        ${hoverActions}
       </div>
+      ${reactionsBox}
       <div class="msg-meta ${mine ? 'from-me' : ''}">${timeAgo(m.created_at)}${edited}${actions}${ticks}</div>
     </div>`;
   }
@@ -132,6 +203,8 @@
     return body ? body.querySelector(`.msg-item[data-mid="${id}"]`) : null;
   }
   function updateBubble(m) {
+    const cached = msgCache.get(Number(m.id));
+    if (cached) { cached.content = m.content; cached.edited = 1; }
     const item = findItem(m.id);
     if (!item) return;
     const t = item.querySelector('.m-text');
@@ -146,6 +219,7 @@
     }
   }
   function removeBubble(id) {
+    msgCache.delete(Number(id));
     const item = findItem(id);
     if (item) item.remove();
   }
@@ -236,6 +310,7 @@
     if (!body) return;
     if (seen.has(m.id)) return;
     seen.add(m.id);
+    msgCache.set(Number(m.id), m);
     const emptyEl = body.querySelector('.empty');
     if (emptyEl) body.innerHTML = '';
     body.insertAdjacentHTML('beforeend', bubbleHTML(m));
@@ -276,6 +351,70 @@
     if (msg) toast(msg);
   }
 
+  // ===== Reply state + the "replying to …" bar above the composer =====
+  function renderReplyBar() {
+    const bar = document.getElementById('reply-bar');
+    if (!bar) return;
+    if (!replyTarget) { bar.hidden = true; bar.innerHTML = ''; return; }
+    const m = replyTarget;
+    const who = m.from_id === me.id ? 'yourself' : ((activeUser && activeUser.name) || 'them');
+    let snippet = m.content || '';
+    if (!snippet && m.attachment) snippet = attachmentLabel(m.attachment.type);
+    if (!snippet && m.attachment_type) snippet = attachmentLabel(m.attachment_type);
+    bar.innerHTML = `<div class="reply-bar-inner">
+        <div class="rb-accent"></div>
+        <div class="rb-body">
+          <span class="rb-author">Replying to ${escapeHTML(who)}</span>
+          <span class="rb-snippet">${escapeHTML((snippet || '').slice(0, 140)) || '(no text)'}</span>
+        </div>
+        <button type="button" class="rb-close" title="Cancel reply" aria-label="Cancel reply">×</button>
+      </div>`;
+    bar.hidden = false;
+    bar.querySelector('.rb-close').onclick = clearReplyTarget;
+  }
+  function setReplyTarget(m) {
+    if (!m) return;
+    replyTarget = m;
+    renderReplyBar();
+    const ta = convEl.querySelector('.msg-form textarea');
+    if (ta) ta.focus();
+  }
+  function clearReplyTarget() { replyTarget = null; renderReplyBar(); }
+
+  // Smooth-scroll to a quoted message and briefly highlight it.
+  function jumpToMessage(id) {
+    const item = findItem(id);
+    if (!item) return;
+    item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    item.classList.add('msg-highlight');
+    setTimeout(() => item.classList.remove('msg-highlight'), 1600);
+  }
+
+  // Toggle/set a reaction on a message, then reflect the server's aggregate.
+  async function reactToMessage(messageId, emoji) {
+    try {
+      const { reactions } = await api(`/api/messages/${messageId}/react`, { method: 'POST', body: { emoji } });
+      const item = findItem(messageId);
+      if (item) setReactions(item, reactions);
+      const cached = msgCache.get(Number(messageId));
+      if (cached) cached.reactions = reactions;
+    } catch (ex) { toast(ex.message || 'Could not react to the message.'); }
+  }
+  function openReactionPicker(anchor, messageId) {
+    if (!window.EmojiPicker) return;
+    EmojiPicker.open(anchor, { onPick: (emoji) => reactToMessage(messageId, emoji) });
+  }
+
+  function insertAtCursor(ta, text) {
+    if (!ta) return;
+    const start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+    const end = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
+    ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+    const pos = start + text.length;
+    ta.selectionStart = ta.selectionEnd = pos;
+    ta.focus();
+  }
+
   async function openConv(userId) {
     active = userId;
     seen.clear();
@@ -300,9 +439,11 @@
         </a>
       </div>
       <div class="msg-conv-body" id="conv-body"></div>
+      <div class="msg-reply-bar" id="reply-bar" hidden></div>
       <div class="msg-attach-preview" id="attach-preview" hidden></div>
       <form class="msg-form">
         <button type="button" class="msg-attach-btn" id="attach-btn" title="Attach a file" aria-label="Attach a file">${PAPERCLIP}</button>
+        <button type="button" class="msg-emoji-btn" id="emoji-btn" title="Emoji" aria-label="Insert emoji">${ICON_REACT}</button>
         <input type="file" id="attach-input" class="msg-attach-input" accept="${ATTACH_ACCEPT}" hidden />
         <textarea placeholder="Write a message…"></textarea>
         <button class="btn-fill" type="submit">Send</button>
@@ -324,10 +465,13 @@
     }
 
     const body = document.getElementById('conv-body');
+    msgCache.clear();
+    replyTarget = null;
+    renderReplyBar();
     if (!messages.length) {
       body.innerHTML = '<div class="empty">No messages yet — say hi 👋</div>';
     } else {
-      messages.forEach(m => seen.add(m.id));
+      messages.forEach(m => { seen.add(m.id); msgCache.set(Number(m.id), m); });
       body.innerHTML = messages.map(m => bubbleHTML(m)).join('');
       scrollConvToBottom();
     }
@@ -406,6 +550,16 @@
       attachInput.onchange = () => { if (attachInput.files[0]) setPending(attachInput.files[0]); };
     }
 
+    // Emoji button → open the full picker; selections insert at the cursor and
+    // the picker stays open so several emojis can be added in a row.
+    const emojiBtn = document.getElementById('emoji-btn');
+    if (emojiBtn && window.EmojiPicker) {
+      emojiBtn.onclick = () => EmojiPicker.open(emojiBtn, {
+        startExpanded: true, keepOpenOnPick: true,
+        onPick: (emoji) => insertAtCursor(ta, emoji),
+      });
+    }
+
     // Drag & drop anywhere over the conversation pane. The listeners are wired
     // once (convEl persists across openConv) and routed to the live composer.
     currentSetPending = setPending;
@@ -435,6 +589,16 @@
       if (!text && !file) return;
       if (file && file.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
 
+      // Capture (and clear) the reply target up front so the composer resets
+      // immediately even though the send completes asynchronously.
+      const reply = replyTarget;
+      const replyPreview = reply ? {
+        id: reply.id, from_id: reply.from_id,
+        from_name: reply.from_id === me.id ? null : ((activeUser && activeUser.name) || null),
+        content: reply.content || '',
+        attachment_type: (reply.attachment && reply.attachment.type) || reply.attachment_type || null,
+      } : null;
+
       // Render the message immediately (with a local image preview) so sending
       // feels instant, then upload in the background and reconcile. The composer
       // is cleared right away so the user can keep typing.
@@ -443,11 +607,13 @@
       const optimistic = {
         id: tempId, from_id: me.id, to_id: userId, content: text,
         created_at: Date.now(), read: 0, edited: 0,
+        reply_to: replyPreview || undefined,
         attachment: file ? { url: localUrl || '#', type: file.type, name: file.name, size: file.size } : null,
       };
       appendOptimistic(optimistic);
       ta.value = '';
       clearPending();
+      clearReplyTarget();
       ta.focus();
 
       try {
@@ -457,10 +623,13 @@
           // upload, no encode/decode cost on either end).
           const fd = new FormData();
           fd.append('content', text);
+          if (replyPreview) fd.append('reply_to_id', String(replyPreview.id));
           fd.append('file', file, file.name);
           ({ message } = await api(`/api/messages/${userId}`, { method: 'POST', body: fd }));
         } else {
-          ({ message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: text } }));
+          const body = { content: text };
+          if (replyPreview) body.reply_to_id = replyPreview.id;
+          ({ message } = await api(`/api/messages/${userId}`, { method: 'POST', body }));
         }
         reconcileOptimistic(tempId, message);
         loadThreads();
@@ -476,7 +645,14 @@
   RT.on('message', (d) => {
     if (!d || !d.message) {
       // Read-receipt ping: the peer opened our conversation and saw our messages.
-      if (d && d.action === 'read' && active && Number(d.by) === active) markOutgoingSeen();
+      if (d && d.action === 'read' && active && Number(d.by) === active) { markOutgoingSeen(); return; }
+      // Reaction update on a message in (any of) our conversations.
+      if (d && d.action === 'react' && d.message_id != null) {
+        const item = findItem(d.message_id);
+        if (item) setReactions(item, d.reactions || []);
+        const cached = msgCache.get(Number(d.message_id));
+        if (cached) cached.reactions = d.reactions || [];
+      }
       return;
     }
     const m = d.message;
@@ -509,6 +685,36 @@
     // "now" locally; a fresh open of the thread will reconcile with the server.
     if (!d.online) activeUser.last_seen = Date.now();
     renderStatusLine(activeUser);
+  });
+
+  // ===== Reply / react interactions (delegated; convEl persists across renders) =====
+  convEl.addEventListener('click', (e) => {
+    const item = e.target.closest('.msg-item');
+
+    // Jump to a quoted message when its preview is tapped.
+    const quote = e.target.closest('.reply-quote');
+    if (quote) { e.preventDefault(); jumpToMessage(quote.dataset.target); return; }
+
+    // Toggle a reaction by tapping an existing pill.
+    const pill = e.target.closest('.reaction-pill');
+    if (pill && item) { e.preventDefault(); reactToMessage(item.dataset.mid, pill.dataset.emoji); return; }
+
+    // Reply affordance.
+    const replyBtn = e.target.closest('.mh-reply');
+    if (replyBtn && item) {
+      e.preventDefault();
+      const m = msgCache.get(Number(item.dataset.mid));
+      if (m) setReplyTarget(m);
+      return;
+    }
+
+    // React affordance → open the emoji picker anchored to the button.
+    const reactBtn = e.target.closest('.mh-react');
+    if (reactBtn && item) {
+      e.preventDefault();
+      openReactionPicker(reactBtn, item.dataset.mid);
+      return;
+    }
   });
 
   // ===== Edit / delete own messages (delegated; convEl persists across renders) =====
