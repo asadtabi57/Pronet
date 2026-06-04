@@ -859,6 +859,10 @@ app.post('/api/auth/forgot-password/request', forgotLimiter, wrap(async (req, re
     return res.status(400).json({ error: 'Please enter a valid email address.' });
   }
   const user = await findUserByEmail(em);
+  // Block the recovery flow entirely if the email is not registered — no OTP, no email.
+  if (!user) {
+    return res.status(404).json({ error: 'This email is not registered. Please sign up first.' });
+  }
   // Only send if a password-based account exists. OAuth-only accounts have no password to reset.
   if (user && user.password_hash) {
     const otp = String(Math.floor(100000 + Math.random() * 900000)); // 6 digits

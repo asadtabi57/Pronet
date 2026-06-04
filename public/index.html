@@ -99,6 +99,11 @@
         </div>
         <p class="fp-msg" id="fp-msg-email"></p>
         <button class="btn btn-primary btn-block" id="fp-send-btn" type="button">Send code</button>
+        <!-- Non-member fallback: shown when the email isn't registered (404) -->
+        <div class="fp-notfound" id="fp-notfound" hidden>
+          <p class="fp-msg err" style="margin-top:14px">Account not found. Please create an account first.</p>
+          <button class="btn btn-primary btn-block" id="fp-goto-signup" type="button">Create an account</button>
+        </div>
       </div>
 
       <!-- Step 2: OTP -->
@@ -253,6 +258,12 @@
       const steps = overlay.querySelectorAll('.fp-step');
       function show(step) {
         steps.forEach(s => { s.hidden = s.dataset.step !== step; });
+        if (step === 'email') {
+          const nf = document.getElementById('fp-notfound');
+          if (nf) nf.hidden = true;
+          const sb = document.getElementById('fp-send-btn');
+          if (sb) sb.hidden = false;
+        }
       }
       function open() {
         overlay.classList.add('open');
@@ -263,6 +274,9 @@
         if (le) document.getElementById('fp-email').value = le;
         show('email');
         clearMsgs();
+        // Reset the non-member fallback view each time the modal opens.
+        document.getElementById('fp-notfound').hidden = true;
+        document.getElementById('fp-send-btn').hidden = false;
         setTimeout(() => document.getElementById('fp-email').focus(), 50);
       }
       function close() {
@@ -305,10 +319,23 @@
           show('otp');
           setTimeout(() => document.getElementById('fp-otp').focus(), 50);
         } catch (ex) {
+          // Non-member fallback: the email isn't registered — block recovery and
+          // invite them to sign up instead of advancing to the OTP step.
+          if (ex && ex.status === 404) {
+            document.getElementById('fp-send-btn').hidden = true;
+            document.getElementById('fp-msg-email').textContent = '';
+            document.getElementById('fp-notfound').hidden = false;
+            return;
+          }
           msg('fp-msg-email', ex.message || 'Something went wrong. Try again.');
         } finally { busy(btn, false); }
       }
       document.getElementById('fp-send-btn').addEventListener('click', sendCode);
+      // Non-member fallback → transition over to the Signup view.
+      document.getElementById('fp-goto-signup').addEventListener('click', () => {
+        close();
+        location.href = '/signup.html';
+      });
       document.getElementById('fp-resend').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
       document.getElementById('fp-back-email').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
 

@@ -106,7 +106,11 @@ async function api(path, { method = 'GET', body, _retried = false } = {}) {
     }
     await signOut(); throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error(data.error || ('Request failed: ' + res.status));
+  if (!res.ok) {
+    const err = new Error(data.error || ('Request failed: ' + res.status));
+    err.status = res.status;
+    throw err;
+  }
   Session.touch();
   clearRedirectGuard(); // a successful request proves the session is healthy
   return data;
