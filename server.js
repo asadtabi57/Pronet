@@ -926,13 +926,32 @@ app.put('/api/me', authRequired, wrap(async (req, res) => {
 
 // --- Users / Profiles ---
 app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
-  const u = await findUser(Number(req.params.id));
-  if (!u) return res.status(404).json({ error: 'User not found' });
-  // Profile DTO and the user's posts are independent → fetch concurrently.
-  const [profile, posts] = await Promise.all([
-    publicUser(u, req.user.id),
-    fetchPostDTOs({ viewerId: req.user.id, where: 'p.user_id = $2', params: [u.id], limit: 20 }),
+  const targetId = Number(req.params.id);
+  const viewerId = req.user.id;
+  // Fold the user row, connection_count and viewer-relationship into ONE query
+  // (instead of findUser + the two lookups inside publicUser), and run it in
+  // parallel with the posts query. Cuts this hot profile endpoint from ~3
+  // sequential DB round-trips down to one wave.
+  const [userR, posts] = await Promise.all([
+    q(
+      `SELECT u.*,
+              (SELECT COUNT(*)::int FROM connections c
+                 WHERE (c.user_a = u.id OR c.user_b = u.id) AND c.accepted = 1) AS connection_count,
+              (SELECT c.user_a FROM connections c
+                 WHERE (c.user_a = $2 AND c.user_b = u.id)
+                    OR (c.user_b = $2 AND c.user_a = u.id) LIMIT 1) AS rel_user_a,
+              (SELECT c.accepted FROM connections c
+                 WHERE (c.user_a = $2 AND c.user_b = u.id)
+                    OR (c.user_b = $2 AND c.user_a = u.id) LIMIT 1) AS rel_accepted
+         FROM users u WHERE u.id = $1`,
+      [targetId, viewerId]
+    ),
+    fetchPostDTOs({ viewerId, where: 'p.user_id = $2', params: [targetId], limit: 20 }),
   ]);
+  if (userR.rowCount === 0) return res.status(404).json({ error: 'User not found' });
+  const u = userR.rows[0];
+  const rel = u.rel_user_a != null ? { user_a: u.rel_user_a, accepted: u.rel_accepted } : null;
+  const profile = buildUserDTO(u, viewerId, u.connection_count, rel);
   profile.posts = posts;
   res.json({ user: profile });
 }));
@@ -1242,16 +1261,24 @@ app.post('/api/people/:id/disconnect', authRequired, wrap(async (req, res) => {
 }));
 
 app.get('/api/connections', authRequired, wrap(async (req, res) => {
+  // Everyone in this list is an accepted connection of the viewer, so we already
+  // know the relationship (connected). Fetch the user rows together with their
+  // connection_count inline — one query instead of a second publicUsersByIds
+  // wave that redundantly re-selected the same user rows.
+  const viewerId = req.user.id;
   const r = await q(
-    `SELECT u.* FROM users u
-      JOIN connections c
-        ON ((c.user_a = $1 AND c.user_b = u.id)
-         OR (c.user_b = $1 AND c.user_a = u.id))
-       AND c.accepted = 1`,
-    [req.user.id]
+    `SELECT u.*,
+            (SELECT COUNT(*)::int FROM connections c2
+               WHERE (c2.user_a = u.id OR c2.user_b = u.id) AND c2.accepted = 1) AS connection_count
+       FROM users u
+       JOIN connections c
+         ON ((c.user_a = $1 AND c.user_b = u.id)
+          OR (c.user_b = $1 AND c.user_a = u.id))
+        AND c.accepted = 1`,
+    [viewerId]
   );
-  const userMap = await publicUsersByIds(r.rows.map(u => u.id), req.user.id);
-  const out = r.rows.map(u => userMap.get(Number(u.id))).filter(Boolean);
+  const rel = { user_a: viewerId, accepted: 1 };
+  const out = r.rows.map(u => buildUserDTO(u, viewerId, u.connection_count, rel));
   res.json({ connections: out });
 }));
 
