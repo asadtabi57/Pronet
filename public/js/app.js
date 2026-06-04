@@ -412,7 +412,7 @@ async function renderNav(activeTab) {
             ${t.badge ? `<span class="badge">${t.badge > 99 ? '99+' : t.badge}</span>` : ''}
           </a>
         `).join('')}
-        <button type="button" class="nav-tab nav-settings-btn" id="nav-settings-btn" aria-haspopup="true" aria-label="Settings & Privacy">
+        <button type="button" class="nav-tab nav-settings-btn" id="nav-settings-btn" data-no-viewer="true" aria-haspopup="true" aria-label="Settings & Privacy">
           <span class="nav-avatar">${avatar(me, 'sm')}</span>
           <span class="label">Me ▾</span>
         </button>
