@@ -440,43 +440,71 @@
     if (!curVid) { toast('Camera switch needs a video call.'); return; }
 
     const flipBtn = document.getElementById('ctrl-flip');
-    if (flipBtn) flipBtn.classList.add('off');
+    if (flipBtn) { flipBtn.classList.add('off'); flipBtn.disabled = true; }
+
     const next = state.facingMode === 'user' ? 'environment' : 'user';
+    const settings = (curVid.getSettings && curVid.getSettings()) || {};
+    const curDeviceId = settings.deviceId;
 
-    let newStream;
+    // Build an ordered list of constraint sets to try — most reliable first.
+    // `facingMode: { ideal }` is too weak on Android (it frequently hands back
+    // the SAME lens), so we first target a concrete *different* deviceId, then
+    // fall back to an exact facingMode, then a soft one.
+    const attempts = [];
     try {
-      newStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: next }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      const wantBack = next === 'environment';
+      let target = cams.find(c => {
+        const l = (c.label || '').toLowerCase();
+        return c.deviceId && c.deviceId !== curDeviceId &&
+          (wantBack ? /(back|rear|environment)/.test(l) : /(front|user|face)/.test(l));
       });
-    } catch (e) {
-      if (flipBtn) flipBtn.classList.remove('off');
-      toast('Could not switch camera.');
-      return;
-    }
+      if (!target) target = cams.find(c => c.deviceId && c.deviceId !== curDeviceId);
+      if (target) attempts.push({ audio: false, video: { deviceId: { exact: target.deviceId } } });
+    } catch (e) { /* enumerateDevices unavailable — rely on facingMode */ }
+    attempts.push({ audio: false, video: { facingMode: { exact: next } } });
+    attempts.push({ audio: false, video: { facingMode: { ideal: next }, width: { ideal: 1280 }, height: { ideal: 720 } } });
 
-    const newTrack = newStream.getVideoTracks()[0];
-    if (!newTrack) {
-      if (flipBtn) flipBtn.classList.remove('off');
-      newStream.getTracks().forEach(t => t.stop());
-      toast('No other camera found.');
-      return;
-    }
-    newTrack.enabled = !state.camOff;
-
-    // Hand the new track to the peer in place of the old one (renegotiation-free).
-    const sender = state.pc && state.pc.getSenders().find(s => s.track && s.track.kind === 'video');
-    if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) {} }
-
-    // Swap the track inside our local stream + preview, then stop the old one.
+    // Release the current camera FIRST — many phones can't open both the front
+    // and back lens simultaneously, so acquiring the new one fails otherwise.
     state.localStream.removeTrack(curVid);
     curVid.stop();
-    state.localStream.addTrack(newTrack);
-    state.facingMode = next;
 
-    const lv = document.getElementById('call-local');
-    if (lv) lv.srcObject = state.localStream;
-    if (flipBtn) flipBtn.classList.remove('off');
+    let newStream = null;
+    for (const c of attempts) {
+      try { newStream = await navigator.mediaDevices.getUserMedia(c); if (newStream) break; }
+      catch (e) { newStream = null; }
+    }
+
+    const applyTrack = async (track, facing) => {
+      track.enabled = !state.camOff;
+      const sender = state.pc && state.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) { try { await sender.replaceTrack(track); } catch (e) {} }
+      state.localStream.addTrack(track);
+      state.facingMode = facing;
+      const lv = document.getElementById('call-local');
+      if (lv) lv.srcObject = state.localStream;
+    };
+
+    const newTrack = newStream && newStream.getVideoTracks()[0];
+    if (!newTrack) {
+      // Couldn't get the other camera — restore the original so video continues.
+      try {
+        const back = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: state.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        const bt = back.getVideoTracks()[0];
+        if (bt) await applyTrack(bt, state.facingMode);
+      } catch (e) {}
+      if (flipBtn) { flipBtn.classList.remove('off'); flipBtn.disabled = false; }
+      toast('Could not switch camera on this device.');
+      return;
+    }
+
+    await applyTrack(newTrack, next);
+    if (flipBtn) { flipBtn.classList.remove('off'); flipBtn.disabled = false; }
   }
 
   async function toggleScreen() {
