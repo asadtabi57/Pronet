@@ -28,6 +28,7 @@
     muted: false,
     camOff: false,
     sharing: false,
+    facingMode: 'user', // 'user' (front) | 'environment' (back)
   };
 
   // ---------- DOM ----------
@@ -55,6 +56,7 @@
         <div class="call-controls" id="call-controls">
           <button class="call-ctrl" id="ctrl-mute" title="Mute"><span class="ci">🎤</span><small>Mute</small></button>
           <button class="call-ctrl" id="ctrl-cam" title="Camera"><span class="ci">📷</span><small>Camera</small></button>
+          <button class="call-ctrl" id="ctrl-flip" title="Switch camera" style="display:none"><span class="ci">🔄</span><small>Flip</small></button>
           <button class="call-ctrl" id="ctrl-screen" title="Share screen"><span class="ci">🖥️</span><small>Share</small></button>
           <button class="call-ctrl call-end" id="ctrl-end" title="End call"><span class="ci">📞</span><small>End</small></button>
         </div>
@@ -82,6 +84,7 @@
 
     document.getElementById('ctrl-mute').onclick = toggleMute;
     document.getElementById('ctrl-cam').onclick = toggleCamera;
+    document.getElementById('ctrl-flip').onclick = switchCamera;
     document.getElementById('ctrl-screen').onclick = toggleScreen;
     document.getElementById('ctrl-end').onclick = () => endCall(true);
     document.getElementById('inc-accept').onclick = acceptIncoming;
@@ -144,7 +147,12 @@
 
   // ---------- Media + PeerConnection ----------
   async function getMedia(video) {
-    const constraints = { audio: true, video: video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false };
+    const constraints = {
+      audio: true,
+      video: video
+        ? { facingMode: { ideal: state.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        : false,
+    };
     return navigator.mediaDevices.getUserMedia(constraints);
   }
 
@@ -270,13 +278,31 @@
   function updateCtrlButtons(callType) {
     const camBtn = document.getElementById('ctrl-cam');
     const screenBtn = document.getElementById('ctrl-screen');
+    const flipBtn = document.getElementById('ctrl-flip');
     const isVideo = callType === 'video';
     camBtn.style.display = isVideo ? '' : 'none';
     // Hide the screen-share button entirely where the browser can't capture a
     // display surface (most phones) so users aren't offered a dead control.
     const canShare = navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function';
     screenBtn.style.display = (isVideo && canShare) ? '' : 'none';
+    // Camera flip only makes sense on a video call with more than one camera
+    // (i.e. phones with front + back). Hide it until we confirm a 2nd camera.
+    flipBtn.style.display = 'none';
+    if (isVideo) maybeShowFlip();
     document.getElementById('ctrl-mute').classList.toggle('off', false);
+  }
+
+  async function maybeShowFlip() {
+    const flipBtn = document.getElementById('ctrl-flip');
+    if (!flipBtn) return;
+    try {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      // Some browsers only expose a 2nd camera after permission is granted; we
+      // call this after getUserMedia so labels/count are reliable here.
+      if (cams.length > 1) flipBtn.style.display = '';
+    } catch (e) { /* leave hidden */ }
   }
 
   function cancelOutgoing() {
@@ -407,6 +433,52 @@
     b.classList.toggle('off', state.camOff);
   }
 
+  async function switchCamera() {
+    if (!state.localStream) return;
+    if (state.sharing) { toast('Stop screen sharing to switch camera.'); return; }
+    const curVid = state.localStream.getVideoTracks()[0];
+    if (!curVid) { toast('Camera switch needs a video call.'); return; }
+
+    const flipBtn = document.getElementById('ctrl-flip');
+    if (flipBtn) flipBtn.classList.add('off');
+    const next = state.facingMode === 'user' ? 'environment' : 'user';
+
+    let newStream;
+    try {
+      newStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: next }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+    } catch (e) {
+      if (flipBtn) flipBtn.classList.remove('off');
+      toast('Could not switch camera.');
+      return;
+    }
+
+    const newTrack = newStream.getVideoTracks()[0];
+    if (!newTrack) {
+      if (flipBtn) flipBtn.classList.remove('off');
+      newStream.getTracks().forEach(t => t.stop());
+      toast('No other camera found.');
+      return;
+    }
+    newTrack.enabled = !state.camOff;
+
+    // Hand the new track to the peer in place of the old one (renegotiation-free).
+    const sender = state.pc && state.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) {} }
+
+    // Swap the track inside our local stream + preview, then stop the old one.
+    state.localStream.removeTrack(curVid);
+    curVid.stop();
+    state.localStream.addTrack(newTrack);
+    state.facingMode = next;
+
+    const lv = document.getElementById('call-local');
+    if (lv) lv.srcObject = state.localStream;
+    if (flipBtn) flipBtn.classList.remove('off');
+  }
+
   async function toggleScreen() {
     if (!state.pc) return;
     const sender = state.pc.getSenders().find(s => s.track && s.track.kind === 'video');
@@ -485,6 +557,7 @@
       call: null, role: null, peerUser: null, pc: null, localStream: null, remoteStream: null,
       cameraTrack: null, screenStream: null, pendingCandidates: [], haveRemoteDesc: false,
       timer: null, ringTimer: null, startedAt: null, muted: false, camOff: false, sharing: false,
+      facingMode: 'user',
     });
     // Refresh call logs in any open conversation.
     if (window.__onCallEnded) try { window.__onCallEnded(); } catch (e) {}
