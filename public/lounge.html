@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ProNet — Lounge</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="app">
+  <header class="app-nav" id="top-nav"></header>
+  <main class="lounge-page" style="max-width: var(--container)">
+
+    <!-- 1. Co-Working Lounge -->
+    <section class="feature-section" id="coworking-lounge">
+      <div class="feature-head">
+        <h2>Unbothered Co-Working Lounge</h2>
+        <p>Drop in, see who's around, and lock in to a shared lofi stream — no camera, no pressure.</p>
+      </div>
+      <div class="card lounge-card">
+        <div class="lounge-card-top">
+          <span class="lounge-count" id="lounge-count">0 in the zone</span>
+          <button type="button" class="lounge-join-btn" id="lounge-join-btn">Join the lounge</button>
+        </div>
+        <div class="lounge-grid" id="lounge-grid"></div>
+        <p class="lounge-empty" id="lounge-empty">No one's here yet. Be the first to drop in.</p>
+      </div>
+
+      <div class="lounge-audio-bar" id="lounge-audio-bar">
+        <button type="button" class="la-btn" id="la-play" aria-label="Play lofi">▶</button>
+        <div class="la-meta">
+          <div class="la-title">Lofi Focus Stream</div>
+          <div class="la-sub" id="la-status">Paused</div>
+        </div>
+        <div class="la-eq" id="la-eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <button type="button" class="la-btn la-mute" id="la-mute" aria-label="Mute">🔇</button>
+        <!-- Placeholder royalty-free stream; swap for your own lofi MP3 anytime. -->
+        <audio id="lounge-audio" loop muted preload="none"
+               src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3"></audio>
+      </div>
+    </section>
+
+    <!-- 2. Professional Tech Tree -->
+    <section class="feature-section" id="tech-tree-section">
+      <div class="feature-head">
+        <h2>Your Professional Tech Tree</h2>
+        <p>A gamified map of your skills and projects. Tap an unlocked node to explore what you've built.</p>
+      </div>
+      <div class="card tt-card">
+        <div id="tech-tree-container"></div>
+      </div>
+    </section>
+
+    <!-- 3. Tech Bites -->
+    <section class="feature-section" id="tech-bites-section">
+      <div class="feature-head">
+        <h2>Tech Bites — Meet up in Lahore</h2>
+        <p>Hand-picked spots for real-world tech meetups, sorted by the best high-protein pick.</p>
+      </div>
+      <div id="tech-bites-grid"></div>
+    </section>
+
+  </main>
+
+  <script src="/js/app.js"></script>
+  <script src="/js/calls.js"></script>
+  <script src="/js/lounge.js"></script>
+  <script src="/js/techtree.js"></script>
+  <script src="/js/techbites.js"></script>
+</body>
+</html>

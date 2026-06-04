@@ -388,6 +388,7 @@ async function renderNav(activeTab) {
   const tabs = [
     { id: 'home', label: 'Home', icon: '🏠', href: '/feed.html' },
     { id: 'network', label: 'My Network', icon: '👥', href: '/network.html' },
+    { id: 'lounge', label: 'Lounge', icon: '🎧', href: '/lounge.html' },
     { id: 'messaging', label: 'Messaging', icon: '💬', href: '/messages.html', badge: unreadMsgs },
     { id: 'notifications', label: 'Notifications', icon: '🔔', href: '/notifications.html', badge: unreadNotif },
     { id: 'me', label: 'Me', icon: '👤', href: `/profile.html?id=${me.id}` },
