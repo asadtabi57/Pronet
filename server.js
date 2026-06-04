@@ -179,6 +179,11 @@ async function authRequired(req, res, next) {
 // publicUser (single) and publicUsersByIds (batch) so the shape never drifts.
 function buildUserDTO(u, viewerId, connectionCount, rel) {
   const uid = Number(u.id);
+  const isSelf = viewerId != null && Number(viewerId) === uid;
+  // Privacy gating: hide presence/last-seen from OTHER viewers when the user has
+  // turned those off. The owner always sees their own true state.
+  const onlineVisible   = isSelf || u.is_online_visible !== false;
+  const lastSeenVisible = isSelf || u.is_last_seen_visible !== false;
   const out = {
     id: uid, name: u.name, email: u.email, headline: u.headline || '',
     about: u.about || '', avatar_color: u.avatar_color,
@@ -188,9 +193,16 @@ function buildUserDTO(u, viewerId, connectionCount, rel) {
     cover_color: u.cover_color || '#a0c4ff',
     subscription: u.subscription || null,
     connection_count: connectionCount || 0,
-    online: isUserOnline(uid),
-    last_seen: u.last_seen != null ? Number(u.last_seen) : null,
+    online: isSelf ? isUserOnline(uid) : (onlineVisible ? isUserVisibleOnline(uid) : false),
+    last_seen: (lastSeenVisible && u.last_seen != null) ? Number(u.last_seen) : null,
+    profile_visibility: u.profile_visibility || 'public',
   };
+  // Expose the raw privacy switches only to the owner so the Settings menu can
+  // render their current state. Never leak them to other viewers.
+  if (isSelf) {
+    out.is_online_visible    = u.is_online_visible !== false;
+    out.is_last_seen_visible = u.is_last_seen_visible !== false;
+  }
   if (viewerId != null && viewerId !== uid) {
     out.connected = false;
     out.pending_out = false;  // I sent a request to them
@@ -324,14 +336,30 @@ function sseSend(userId, event, data) {
 // A user is "online" while they hold at least one live SSE connection. We
 // broadcast online/offline transitions to every connected client so each
 // browser can keep a live set of online user ids (drives the green dot).
+//
+// Privacy: users who turned OFF "Active status" are tracked here so we never
+// advertise their presence — they keep full SSE delivery (messages, calls,
+// notifications) but are invisible in the online set and broadcasts.
+const presenceHidden = new Set(); // userId(Number) -> online status is hidden
+function isPresenceHidden(userId) { return presenceHidden.has(Number(userId)); }
+function setPresenceHidden(userId, hidden) {
+  const key = Number(userId);
+  if (hidden) presenceHidden.add(key); else presenceHidden.delete(key);
+}
 function onlineUserIds() {
-  return [...sseClients.keys()];
+  return [...sseClients.keys()].filter(id => !presenceHidden.has(id));
 }
 function isUserOnline(userId) {
   const set = sseClients.get(Number(userId));
   return !!(set && set.size > 0);
 }
+// Online AND allowed to be seen — what other users are permitted to observe.
+function isUserVisibleOnline(userId) {
+  return isUserOnline(userId) && !presenceHidden.has(Number(userId));
+}
 function broadcastPresence(userId, online) {
+  // Never advertise an "online" transition for a user hiding their status.
+  if (online && presenceHidden.has(Number(userId))) return;
   const payload = `event: presence\ndata: ${JSON.stringify({ user_id: Number(userId), online })}\n\n`;
   for (const set of sseClients.values()) {
     for (const res of set) {
@@ -637,6 +665,14 @@ app.get('/api/events', wrap(async (req, res) => {
   res.write('retry: 5000\n\n');
   res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
 
+  // Seed this user's presence-visibility from their saved setting so we never
+  // advertise them if they've hidden their active status. (resolveUserFromToken
+  // returns a minimal user, so read the flag directly.)
+  try {
+    const pr = await q(`SELECT is_online_visible FROM users WHERE id = $1`, [user.id]);
+    setPresenceHidden(user.id, pr.rows[0] && pr.rows[0].is_online_visible === false);
+  } catch (e) { /* default: visible */ }
+
   // Detect the offline -> online transition (first connection for this user).
   const wasOnline = isUserOnline(user.id);
   sseAdd(user.id, res);
@@ -654,6 +690,7 @@ app.get('/api/events', wrap(async (req, res) => {
     // peers can show "last seen 5m ago" in the chat header.
     if (!isUserOnline(user.id)) {
       broadcastPresence(user.id, false);
+      setPresenceHidden(user.id, false); // drop the in-memory flag; reseeded on next connect
       q(`UPDATE users SET last_seen = $1 WHERE id = $2`, [Date.now(), user.id]).catch(() => {});
     }
   });
@@ -925,6 +962,103 @@ app.put('/api/me', authRequired, wrap(async (req, res) => {
   res.json({ user: await publicUser(fresh, fresh.id) });
 }));
 
+// --- Privacy / account settings (Settings & Privacy menu) ---
+// Update any of the three privacy switches. Online-visibility changes are
+// reflected live: we flip the in-memory presence flag and broadcast the
+// resulting state so peers' green dots update immediately.
+app.put('/api/me/settings', authRequired, wrap(async (req, res) => {
+  const body = req.body || {};
+  const sets = [], params = [];
+  let i = 1;
+  if (body.is_online_visible !== undefined) {
+    sets.push(`is_online_visible = $${i++}`); params.push(!!body.is_online_visible);
+  }
+  if (body.is_last_seen_visible !== undefined) {
+    sets.push(`is_last_seen_visible = $${i++}`); params.push(!!body.is_last_seen_visible);
+  }
+  if (body.profile_visibility !== undefined) {
+    const v = String(body.profile_visibility);
+    if (v !== 'public' && v !== 'private') {
+      return res.status(400).json({ error: "profile_visibility must be 'public' or 'private'." });
+    }
+    sets.push(`profile_visibility = $${i++}`); params.push(v);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'No settings provided.' });
+
+  params.push(req.user.id);
+  await q(`UPDATE users SET ${sets.join(', ')} WHERE id = $${i}`, params);
+
+  // Live presence reconciliation when "Active status" was toggled.
+  if (body.is_online_visible !== undefined) {
+    const hide = !body.is_online_visible;
+    setPresenceHidden(req.user.id, hide);
+    if (isUserOnline(req.user.id)) {
+      // hide -> tell peers we went "offline"; show -> tell peers we're "online".
+      if (hide) {
+        // broadcastPresence(online=true) would be suppressed now, so send offline.
+        broadcastPresence(req.user.id, false);
+      } else {
+        broadcastPresence(req.user.id, true);
+      }
+    }
+  }
+
+  const fresh = await findUser(req.user.id);
+  res.json({ user: await publicUser(fresh, fresh.id) });
+}));
+
+// --- Change password (logged-in user) ---
+app.post('/api/auth/change-password', authRequired, wrap(async (req, res) => {
+  const oldPassword = String((req.body && req.body.oldPassword) || '');
+  const newPassword = String((req.body && req.body.newPassword) || '');
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current and new password are required.' });
+  }
+  const user = await findUser(req.user.id);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+  if (!user.password_hash) {
+    return res.status(400).json({ error: 'Your account uses social login, so it has no password to change.' });
+  }
+  if (!bcrypt.compareSync(oldPassword, user.password_hash)) {
+    return res.status(400).json({ error: 'Your current password is incorrect.' });
+  }
+  const pwErr = validatePassword(newPassword);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  if (bcrypt.compareSync(newPassword, user.password_hash)) {
+    return res.status(400).json({ error: 'New password must be different from the current one.' });
+  }
+  await q(`UPDATE users SET password_hash = $1 WHERE id = $2`, [bcrypt.hashSync(newPassword, 10), user.id]);
+  res.json({ ok: true });
+}));
+
+// --- Delete account (hard delete) ---
+// Every user-owned table FKs users(id) ON DELETE CASCADE (posts, comments,
+// likes, connections, messages, notifications, shares, payments, calls,
+// call_signals), so a single DELETE cascades the whole graph. OTP tables are
+// keyed by email (no FK), so we clear those explicitly. Finally drop any live
+// SSE connections and clear the auth cookie.
+app.delete('/api/users/me', authRequired, wrap(async (req, res) => {
+  const uid = Number(req.user.id);
+  const user = await findUser(uid);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+
+  // Close any open realtime streams so we don't keep writing to a deleted user.
+  const set = sseClients.get(uid);
+  if (set) { for (const r of set) { try { r.end(); } catch (e) {} } sseClients.delete(uid); }
+  setPresenceHidden(uid, false);
+  broadcastPresence(uid, false); // make sure peers drop the green dot
+
+  await q(`DELETE FROM users WHERE id = $1`, [uid]);
+  // Email-keyed rows have no FK to cascade through.
+  if (user.email) {
+    await q(`DELETE FROM password_reset_otps WHERE email = $1`, [user.email]).catch(() => {});
+    await q(`DELETE FROM email_otps WHERE email = $1`, [user.email]).catch(() => {});
+  }
+
+  clearAuthCookie(req, res);
+  res.json({ ok: true });
+}));
+
 // --- Users / Profiles ---
 app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
   const targetId = Number(req.params.id);
@@ -943,7 +1077,8 @@ app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
                     OR (c.user_b = $2 AND c.user_a = u.id) LIMIT 1) AS rel_user_a,
               (SELECT c.accepted FROM connections c
                  WHERE (c.user_a = $2 AND c.user_b = u.id)
-                    OR (c.user_b = $2 AND c.user_a = u.id) LIMIT 1) AS rel_accepted
+                    OR (c.user_b = $2 AND c.user_a = u.id) LIMIT 1) AS rel_accepted,
+              (SELECT profile_visibility FROM users WHERE id = $2) AS viewer_visibility
          FROM users u WHERE u.id = $1`,
       [targetId, viewerId]
     ),
@@ -953,9 +1088,47 @@ app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
   const u = userR.rows[0];
   const rel = u.rel_user_a != null ? { user_a: u.rel_user_a, accepted: u.rel_accepted } : null;
   const profile = buildUserDTO(u, viewerId, u.connection_count, rel);
-  profile.posts = posts;
+  // Respect private activity: hide a private user's posts from non-connections.
+  const isConnection = rel && Number(rel.accepted) === 1;
+  const canSeeActivity = viewerId === targetId || u.profile_visibility !== 'private' || isConnection;
+  profile.posts = canSeeActivity ? posts : [];
+  profile.activity_restricted = !canSeeActivity;
   res.json({ user: profile });
+
+  // Profile-view notification (fire-and-forget; never blocks the response).
+  // A private VIEWER stays anonymous to the owner; a public viewer is named.
+  if (targetId !== viewerId) {
+    recordProfileView(targetId, req.user, u.viewer_visibility === 'private').catch(() => {});
+  }
 }));
+
+// Notify a profile owner that someone viewed them, throttled so a refresh /
+// repeat visit doesn't spam. Public viewers are attributed; private viewers
+// produce an anonymous "Someone viewed your profile" with no actor attached.
+const PROFILE_VIEW_THROTTLE_MS = 6 * 60 * 60 * 1000; // 6 hours
+async function recordProfileView(ownerId, viewer, anonymous) {
+  const cutoff = Date.now() - PROFILE_VIEW_THROTTLE_MS;
+  if (anonymous) {
+    // Anonymous: dedupe per-owner within the window (we deliberately store no
+    // viewer id so the visit can never be de-anonymised).
+    const recent = await q(
+      `SELECT 1 FROM notifications
+        WHERE user_id = $1 AND type = 'profile_view_anon' AND created_at > $2 LIMIT 1`,
+      [ownerId, cutoff]
+    );
+    if (recent.rowCount > 0) return;
+    await notify(ownerId, 'profile_view_anon', null, {});
+  } else {
+    // Attributed: dedupe per (owner, viewer) pair within the window.
+    const recent = await q(
+      `SELECT 1 FROM notifications
+        WHERE user_id = $1 AND type = 'profile_view' AND actor_id = $2 AND created_at > $3 LIMIT 1`,
+      [ownerId, viewer.id, cutoff]
+    );
+    if (recent.rowCount > 0) return;
+    await notify(ownerId, 'profile_view', viewer.id, {});
+  }
+}
 
 // --- Search ---
 app.get('/api/search', authRequired, wrap(async (req, res) => {
@@ -1001,8 +1174,22 @@ app.get('/api/search', authRequired, wrap(async (req, res) => {
 }));
 
 // --- Feed / Posts ---
+// Activity scoping: a post from a PRIVATE author is only visible to the author
+// themselves or a confirmed (accepted) connection. Public authors are visible
+// to everyone. ($1 is the viewer id inside fetchPostDTOs.)
+const VISIBLE_AUTHOR_WHERE = `(
+  u.profile_visibility = 'public'
+  OR p.user_id = $1
+  OR EXISTS (
+    SELECT 1 FROM connections c
+     WHERE c.accepted = 1
+       AND ((c.user_a = $1 AND c.user_b = p.user_id)
+         OR (c.user_b = $1 AND c.user_a = p.user_id))
+  )
+)`;
+
 app.get('/api/posts', authRequired, wrap(async (req, res) => {
-  const posts = await fetchPostDTOs({ viewerId: req.user.id, limit: 100 });
+  const posts = await fetchPostDTOs({ viewerId: req.user.id, where: VISIBLE_AUTHOR_WHERE, limit: 100 });
   res.json({ posts });
 }));
 

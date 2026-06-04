@@ -408,13 +408,20 @@ async function renderNav(activeTab) {
             ${t.badge ? `<span class="badge">${t.badge > 99 ? '99+' : t.badge}</span>` : ''}
           </a>
         `).join('')}
-        <a class="nav-tab" href="#" onclick="event.preventDefault();signOut();">
-          <span class="icon">↪</span><span class="label">Sign out</span>
-        </a>
+        <button type="button" class="nav-tab nav-settings-btn" id="nav-settings-btn" aria-haspopup="true" aria-label="Settings & Privacy">
+          <span class="nav-avatar">${avatar(me, 'sm')}</span>
+          <span class="label">Me ▾</span>
+        </button>
       </div>
     </div>`;
 
   installSearchTypeahead();
+
+  const settingsBtn = document.getElementById('nav-settings-btn');
+  if (settingsBtn) settingsBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    openSettingsMenu(settingsBtn);
+  });
 
   // Shared badge setter (also used by realtime listeners).
   window.setNavBadge = function (id, count) {
@@ -724,6 +731,183 @@ function toast(msg) {
   });
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2200);
+}
+
+// ===== Settings & Privacy menu =====
+// Desktop: a dropdown popover anchored under the navbar avatar.
+// Mobile: a slide-up bottom sheet (handled by CSS .as-sheet). One implementation
+// drives both; only positioning differs so the mobile layout stays intact.
+function toggleSwitchHTML(id, on) {
+  return `<button type="button" class="pn-toggle${on ? ' on' : ''}" id="${id}" role="switch" aria-checked="${on ? 'true' : 'false'}"><span class="pn-knob"></span></button>`;
+}
+
+async function openSettingsMenu(anchor) {
+  if (document.querySelector('.settings-backdrop')) return; // already open
+  const me = getMe() || {};
+  // Pull the freshest privacy values (a long-lived session may predate them).
+  let u = me;
+  try { const r = await api('/api/me'); if (r && r.user) { u = r.user; setMe(u); } } catch (e) {}
+
+  const vis = u.profile_visibility === 'private' ? 'private' : 'public';
+  const onlineOn = u.is_online_visible !== false;
+  const lastSeenOn = u.is_last_seen_visible !== false;
+  const isMobile = window.innerWidth <= 768;
+
+  const back = document.createElement('div');
+  back.className = 'settings-backdrop';
+  back.innerHTML = `
+    <div class="settings-menu${isMobile ? ' as-sheet' : ''}" role="menu" aria-label="Settings & Privacy">
+      <div class="settings-head">
+        <span class="settings-title">Settings &amp; Privacy</span>
+        <button type="button" class="settings-close" aria-label="Close">×</button>
+      </div>
+      <a class="settings-item" href="/profile.html?id=${u.id}">
+        <span class="si-ic">${avatar(u, 'sm')}</span>
+        <span class="si-text"><b>${escapeHTML(u.name || 'You')}</b><small>View profile</small></span>
+      </a>
+      <div class="settings-section">
+        <div class="settings-row">
+          <div class="sr-label"><span class="sr-title">Profile visibility</span><span class="sr-sub">Who can see your profile &amp; activity</span></div>
+          <select class="sr-select" id="set-visibility">
+            <option value="public"${vis === 'public' ? ' selected' : ''}>Public</option>
+            <option value="private"${vis === 'private' ? ' selected' : ''}>Private</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="sr-label"><span class="sr-title">Active status</span><span class="sr-sub">Show others when you're online</span></div>
+          ${toggleSwitchHTML('set-online', onlineOn)}
+        </div>
+        <div class="settings-row">
+          <div class="sr-label"><span class="sr-title">Last seen</span><span class="sr-sub">Show your last-seen time in chats</span></div>
+          ${toggleSwitchHTML('set-lastseen', lastSeenOn)}
+        </div>
+      </div>
+      <div class="settings-section">
+        <button type="button" class="settings-item" id="set-change-pw"><span class="si-ic ic-emoji">🔒</span><span class="si-text">Change password</span></button>
+        <button type="button" class="settings-item danger" id="set-delete"><span class="si-ic ic-emoji">🗑️</span><span class="si-text">Delete account</span></button>
+        <button type="button" class="settings-item" id="set-signout"><span class="si-ic ic-emoji">↪</span><span class="si-text">Sign out</span></button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const menu = back.querySelector('.settings-menu');
+
+  // Desktop: position under the avatar, right-aligned to it. Mobile uses the
+  // CSS bottom-sheet, so we leave positioning to the stylesheet there.
+  if (!isMobile && anchor) {
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = (r.bottom + 8) + 'px';
+    menu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  }
+
+  const close = () => { document.removeEventListener('keydown', onKey); back.remove(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  back.querySelector('.settings-close').onclick = close;
+
+  // Persist a single setting and keep the cached user in sync.
+  async function saveSetting(patch) {
+    try {
+      const r = await api('/api/me/settings', { method: 'PUT', body: patch });
+      if (r && r.user) setMe(r.user);
+      return true;
+    } catch (ex) {
+      toast(ex.message || 'Could not update setting.');
+      return false;
+    }
+  }
+
+  // Profile visibility select
+  const sel = back.querySelector('#set-visibility');
+  sel.addEventListener('change', async () => {
+    const prev = vis;
+    const ok = await saveSetting({ profile_visibility: sel.value });
+    if (ok) toast(sel.value === 'private' ? 'Profile set to private.' : 'Profile set to public.');
+    else sel.value = prev;
+  });
+
+  // Toggles
+  function wireToggle(id, field) {
+    const btn = back.querySelector('#' + id);
+    btn.addEventListener('click', async () => {
+      const next = !btn.classList.contains('on');
+      btn.classList.toggle('on', next);
+      btn.setAttribute('aria-checked', next ? 'true' : 'false');
+      const ok = await saveSetting({ [field]: next });
+      if (!ok) { // revert on failure
+        btn.classList.toggle('on', !next);
+        btn.setAttribute('aria-checked', !next ? 'true' : 'false');
+      }
+    });
+  }
+  wireToggle('set-online', 'is_online_visible');
+  wireToggle('set-lastseen', 'is_last_seen_visible');
+
+  // Change password
+  back.querySelector('#set-change-pw').onclick = () => { close(); openChangePasswordModal(); };
+
+  // Delete account
+  back.querySelector('#set-delete').onclick = async () => {
+    close();
+    const ok = await confirmDialog({
+      title: 'Delete account?',
+      message: 'This permanently deletes your profile, posts, messages and connections. This cannot be undone.',
+      confirmText: 'Delete my account',
+      cancelText: 'Keep my account',
+    });
+    if (!ok) return;
+    try {
+      await api('/api/users/me', { method: 'DELETE' });
+      try { sessionStorage.clear(); } catch (e) {}
+      try { if (window.sb) await window.sb.auth.signOut(); } catch (e) {}
+      location.href = '/';
+    } catch (ex) {
+      toast(ex.message || 'Could not delete account.');
+    }
+  };
+
+  // Sign out (moved here from the old nav tab)
+  back.querySelector('#set-signout').onclick = () => { close(); signOut(); };
+}
+
+// Change-password modal — mirrors the forgot-password flow's look & feel.
+function openChangePasswordModal() {
+  const body = `
+    <form id="cpw-form" class="cpw-form" novalidate>
+      <label class="cpw-field"><span>Current password</span>
+        <input type="password" id="cpw-old" autocomplete="current-password" required /></label>
+      <label class="cpw-field"><span>New password</span>
+        <input type="password" id="cpw-new" autocomplete="new-password" required /></label>
+      <label class="cpw-field"><span>Confirm new password</span>
+        <input type="password" id="cpw-confirm" autocomplete="new-password" required /></label>
+      <p class="cpw-hint">Use 8+ characters with upper &amp; lower case, a number and a special character.</p>
+      <div class="cpw-error" id="cpw-error" hidden></div>
+    </form>`;
+  const footer = `
+    <button type="button" class="btn-tiny ghost" id="cpw-cancel">Cancel</button>
+    <button type="button" class="btn-fill" id="cpw-save">Update password</button>`;
+  const { el, close } = openModal({ title: 'Change password', body, footer });
+  const err = el.querySelector('#cpw-error');
+  const showErr = (m) => { err.textContent = m; err.hidden = false; };
+  el.querySelector('#cpw-cancel').onclick = close;
+  const save = el.querySelector('#cpw-save');
+  save.onclick = async () => {
+    err.hidden = true;
+    const oldPassword = el.querySelector('#cpw-old').value;
+    const newPassword = el.querySelector('#cpw-new').value;
+    const confirm = el.querySelector('#cpw-confirm').value;
+    if (!oldPassword || !newPassword) return showErr('Please fill in all fields.');
+    if (newPassword !== confirm) return showErr('New passwords do not match.');
+    save.disabled = true;
+    try {
+      await api('/api/auth/change-password', { method: 'POST', body: { oldPassword, newPassword } });
+      close();
+      toast('Password updated.');
+    } catch (ex) {
+      showErr(ex.message || 'Could not change password.');
+      save.disabled = false;
+    }
+  };
 }
 
 // ===== Global profile picture viewer (WhatsApp/Instagram-style) =====
