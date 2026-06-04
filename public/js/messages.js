@@ -150,7 +150,10 @@
         </div>
         <div class="spacer" style="flex:1"></div>
         <div class="conv-head-actions" id="conv-call-actions"></div>
-        <a class="btn-tiny" href="/profile.html?id=${user.id}">View profile</a>
+        <a class="btn-tiny view-profile" href="/profile.html?id=${user.id}" aria-label="View profile">
+          <svg class="vp-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span class="vp-label">View profile</span>
+        </a>
       </div>
       <div class="msg-conv-body" id="conv-body"></div>
       <form class="msg-form">
