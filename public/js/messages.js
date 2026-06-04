@@ -70,12 +70,12 @@
     });
   }
 
-  function bubbleHTML(m) {
+  function bubbleHTML(m, pending) {
     const mine = m.from_id === me.id;
     const who = mine ? me : (activeUser || { name: '', avatar_color: '#0a66c2' });
     const age = Date.now() - m.created_at;
     let actions = '';
-    if (mine) {
+    if (mine && !pending) {
       const parts = [];
       // Editing only makes sense when there is text to edit.
       if (age <= MSG_EDIT_MS && m.content) parts.push('<a href="#" class="m-edit">Edit</a>');
@@ -83,11 +83,13 @@
       if (parts.length) actions = ' · ' + parts.join(' · ');
     }
     const edited = m.edited ? ' <span class="edited-tag">(edited)</span>' : '';
-    const ticks = mine ? tickHTML(m.read) : '';
+    // While an outgoing message is still uploading, show a subtle status instead
+    // of the read ticks (which only make sense once the server has it).
+    const ticks = pending ? '<span class="m-sending">Sending…</span>' : (mine ? tickHTML(m.read) : '');
     const attHTML = attachmentHTML(m.attachment);
     const textHTML = m.content ? `<span class="m-text">${escapeHTML(m.content)}</span>` : '';
     const attOnly = attHTML && !textHTML ? ' att-only' : '';
-    return `<div class="msg-item" data-mid="${m.id}" data-created="${m.created_at}">
+    return `<div class="msg-item${pending ? ' sending' : ''}" data-mid="${m.id}" data-created="${m.created_at}">
       <div class="msg-row ${mine ? 'from-me' : 'from-them'}">
         ${avatar(who, 'sm')}
         <div class="msg-bubble ${mine ? 'from-me' : 'from-them'}${attHTML ? ' has-att' : ''}${attOnly}">${attHTML}${textHTML}</div>
@@ -192,6 +194,40 @@
     if (emptyEl) body.innerHTML = '';
     body.insertAdjacentHTML('beforeend', bubbleHTML(m));
     scrollConvToBottom();
+  }
+
+  // Render an outgoing message instantly (before the upload finishes) using a
+  // temporary id and a local preview URL for images. Reconciled once the server
+  // responds with the real message.
+  function appendOptimistic(m) {
+    const body = document.getElementById('conv-body');
+    if (!body) return;
+    const emptyEl = body.querySelector('.empty');
+    if (emptyEl) body.innerHTML = '';
+    body.insertAdjacentHTML('beforeend', bubbleHTML(m, true));
+    scrollConvToBottom();
+  }
+  function findItemByMid(id) {
+    const body = document.getElementById('conv-body');
+    return body ? body.querySelector(`.msg-item[data-mid="${id}"]`) : null;
+  }
+  // Swap the temporary bubble for the real one once the send succeeds.
+  function reconcileOptimistic(tempId, real) {
+    const temp = findItemByMid(tempId);
+    if (temp) temp.remove();
+    appendLiveMessage(real);
+  }
+  // Mark a failed send so the user knows it didn't go through.
+  function failOptimistic(tempId, msg) {
+    const temp = findItemByMid(tempId);
+    if (temp) {
+      temp.classList.remove('sending');
+      temp.classList.add('failed');
+      const meta = temp.querySelector('.msg-meta');
+      if (meta) meta.innerHTML = '<span class="m-failed">Failed to send — tap to dismiss</span>';
+      temp.onclick = () => temp.remove();
+    }
+    if (msg) toast(msg);
   }
 
   async function openConv(userId) {
@@ -349,27 +385,38 @@
     form.onsubmit = async (ev) => {
       ev.preventDefault();
       const text = ta.value.trim();
-      if (!text && !pendingFile) return;
+      const file = pendingFile;
+      if (!text && !file) return;
+      if (file && file.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
+
+      // Render the message immediately (with a local image preview) so sending
+      // feels instant, then upload in the background and reconcile. The composer
+      // is cleared right away so the user can keep typing.
+      const tempId = 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+      const localUrl = file && file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const optimistic = {
+        id: tempId, from_id: me.id, to_id: userId, content: text,
+        created_at: Date.now(), read: 0, edited: 0,
+        attachment: file ? { url: localUrl || '#', type: file.type, name: file.name, size: file.size } : null,
+      };
+      appendOptimistic(optimistic);
+      ta.value = '';
+      clearPending();
+      ta.focus();
+
       let attachment = null;
-      if (pendingFile) {
-        if (pendingFile.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
-        try { attachment = { data_url: await readAsDataURL(pendingFile), name: pendingFile.name }; }
-        catch (ex) { toast('Could not read that file.'); return; }
+      if (file) {
+        try { attachment = { data_url: await readAsDataURL(file), name: file.name }; }
+        catch (ex) { failOptimistic(tempId, 'Could not read that file.'); return; }
       }
-      sendBtn.disabled = true; ta.disabled = true;
-      const hadFile = !!pendingFile;
-      if (hadFile) sendBtn.textContent = 'Sending…';
       try {
         const { message } = await api(`/api/messages/${userId}`, { method: 'POST', body: { content: text, attachment } });
-        ta.value = '';
-        clearPending();
-        appendLiveMessage(message);
+        reconcileOptimistic(tempId, message);
         loadThreads();
       } catch (ex) {
-        toast(ex.message || 'Could not send the message.');
+        failOptimistic(tempId, ex.message || 'Could not send the message.');
       } finally {
-        sendBtn.disabled = false; ta.disabled = false; sendBtn.textContent = 'Send';
-        ta.focus();
+        if (localUrl) URL.revokeObjectURL(localUrl);
       }
     };
   }
@@ -396,7 +443,9 @@
     }
     if (active && otherId === active) {
       appendLiveMessage(m);
-      if (m.to_id === me.id) api(`/api/messages/${active}`).catch(() => {});
+      // Mark the peer's messages read via a tiny endpoint instead of re-pulling
+      // the whole conversation (which re-downloaded every message + attachment).
+      if (m.to_id === me.id) api(`/api/messages/${active}/read`, { method: 'POST' }).catch(() => {});
     }
     loadThreads();
   });

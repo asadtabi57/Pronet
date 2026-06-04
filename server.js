@@ -1575,6 +1575,20 @@ app.get('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   res.json({ user: await publicUser(u, req.user.id), messages });
 }));
 
+// Lightweight read-marker. The live message handler calls this when a new
+// message lands in the open conversation — flipping the peer's messages to
+// "read" and pinging them, WITHOUT re-fetching the entire thread (which
+// re-ran a full SELECT and re-sent every message + attachment URL each time).
+app.post('/api/messages/:userId/read', authRequired, wrap(async (req, res) => {
+  const other = Number(req.params.userId);
+  const upd = await q(
+    `UPDATE messages SET read = 1 WHERE from_id = $1 AND to_id = $2 AND read = 0`,
+    [other, req.user.id]
+  );
+  if (upd.rowCount > 0) sseSend(other, 'message', { action: 'read', by: req.user.id });
+  res.json({ ok: true, updated: upd.rowCount });
+}));
+
 app.post('/api/messages/:userId', authRequired, wrap(async (req, res) => {
   const other = Number(req.params.userId);
   const u = await findUser(other);

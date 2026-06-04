@@ -1029,6 +1029,13 @@ body.app {
 .msg-att-file .att-ic { font-size: 26px; line-height: 1; flex-shrink: 0; }
 .msg-att-file:hover { filter: brightness(0.98); }
 
+/* Optimistic (still-uploading) and failed outgoing messages */
+.msg-item.sending .msg-bubble { opacity: .72; }
+.msg-item.sending .msg-att-img img { filter: brightness(.94); }
+.m-sending { color: var(--muted); font-style: italic; }
+.msg-item.failed .msg-bubble { opacity: .85; outline: 1px solid #e74c3c; }
+.m-failed { color: #e74c3c; cursor: pointer; }
+
 /* Drag-and-drop overlay */
 .msg-conv.drag-over::after {
   content: ''; position: absolute; inset: 0; z-index: 5;
