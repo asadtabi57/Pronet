@@ -41,21 +41,67 @@
     loadPosts();
   };
 
-  // ✨ Write with AI — draft a post from a short topic. Always visible; if AI
-  // isn't configured the assistant surfaces a friendly "add a key" message.
+  // ✨ Write with AI — opens a modal to enter a topic + tone, then drafts a post.
   const aiWriteBtn = document.getElementById('ai-write-btn');
   if (aiWriteBtn && window.AI) {
-    aiWriteBtn.onclick = () => {
-      const topic = ta.value.trim();
-      const seed = topic || prompt('What should the post be about?');
-      if (!seed) return;
-      AI.assistant({
-        title: 'Write a post',
-        insertLabel: 'Use this post',
-        run: async () => (await api('/api/ai/draft-post', { method: 'POST', body: { topic: seed } })).text,
-        onInsert: (text) => { ta.value = text; ta.focus(); },
-      });
+    aiWriteBtn.onclick = () => openWriteWithAI(ta.value.trim());
+  }
+
+  function openWriteWithAI(prefillTopic) {
+    const body = `
+      <div class="field">
+        <label>What should the post be about?</label>
+        <textarea id="wa-topic" rows="3" placeholder="e.g. I just earned my AWS Solutions Architect certification">${escapeHTML(prefillTopic || '')}</textarea>
+      </div>
+      <div class="field">
+        <label>Tone</label>
+        <select id="wa-tone">
+          <option value="professional">Professional</option>
+          <option value="enthusiastic">Enthusiastic</option>
+          <option value="storytelling">Storytelling</option>
+          <option value="thoughtful">Thoughtful</option>
+          <option value="casual">Casual</option>
+        </select>
+      </div>
+      <button type="button" class="btn-fill" id="wa-go" style="width:100%">✨ Generate post</button>
+      <div class="wa-result-wrap" id="wa-result" hidden>
+        <textarea class="ai-result" id="wa-text"></textarea>
+        <div class="wa-actions">
+          <button type="button" class="btn-tiny ghost" id="wa-regen">↻ Regenerate</button>
+          <span style="flex:1"></span>
+          <button type="button" class="btn-fill" id="wa-use">Use this post</button>
+        </div>
+      </div>`;
+    const m = openModal({ title: '✨ Write a post with AI', body });
+    const topicEl = m.el.querySelector('#wa-topic');
+    const toneEl = m.el.querySelector('#wa-tone');
+    const goBtn = m.el.querySelector('#wa-go');
+    const resultWrap = m.el.querySelector('#wa-result');
+    const textEl = m.el.querySelector('#wa-text');
+    topicEl.focus();
+
+    async function generate() {
+      const topic = topicEl.value.trim();
+      if (!topic) { toast('Tell me what the post should be about.'); topicEl.focus(); return; }
+      goBtn.disabled = true; goBtn.textContent = 'Generating…';
+      resultWrap.hidden = true;
+      try {
+        const r = await api('/api/ai/draft-post', { method: 'POST', body: { topic, tone: toneEl.value } });
+        textEl.value = r.text || '';
+        resultWrap.hidden = false;
+        textEl.style.height = 'auto'; textEl.style.height = Math.min(textEl.scrollHeight, 320) + 'px';
+      } catch (e) {
+        toast(e.message || 'Could not generate a post. Try again.');
+      } finally { goBtn.disabled = false; goBtn.textContent = '✨ Generate post'; }
+    }
+    goBtn.onclick = generate;
+    m.el.querySelector('#wa-regen').onclick = generate;
+    m.el.querySelector('#wa-use').onclick = () => {
+      ta.value = textEl.value.trim();
+      m.close();
+      ta.focus();
     };
+    textEl.addEventListener('input', () => { textEl.style.height = 'auto'; textEl.style.height = Math.min(textEl.scrollHeight, 320) + 'px'; });
   }
 
   // Network TL;DR digest card (shows only when AI is enabled & there's enough activity).

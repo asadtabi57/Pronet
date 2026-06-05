@@ -2738,3 +2738,12 @@ body.app {
 .profile-page-main { padding: 18px 20px 60px; margin: 0 auto; max-width: var(--container); box-sizing: border-box; }
 @media (max-width: 991px) { .profile-page-main { padding: 14px 14px 48px; } }
 @media (max-width: 600px) { .profile-page-main { padding: 12px 10px 40px; } }
+
+/* Write-with-AI modal result */
+.wa-result-wrap { margin-top: 14px; }
+.wa-result-wrap .ai-result { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: var(--fs-14); font-family: inherit; line-height: 1.5; resize: vertical; min-height: 120px; outline: none; }
+.wa-result-wrap .ai-result:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,.15); }
+.wa-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+#wa-tone { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: var(--fs-14); font-family: inherit; outline: none; background: var(--card); }
+#wa-topic { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: var(--fs-14); font-family: inherit; resize: vertical; outline: none; }
+#wa-topic:focus, #wa-tone:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,.15); }
