@@ -41,10 +41,10 @@
     loadPosts();
   };
 
-  // ✨ Write with AI — draft a post from a short topic.
+  // ✨ Write with AI — draft a post from a short topic. Always visible; if AI
+  // isn't configured the assistant surfaces a friendly "add a key" message.
   const aiWriteBtn = document.getElementById('ai-write-btn');
   if (aiWriteBtn && window.AI) {
-    AI.feature('draft_post').then(on => { if (!on) aiWriteBtn.style.display = 'none'; });
     aiWriteBtn.onclick = () => {
       const topic = ta.value.trim();
       const seed = topic || prompt('What should the post be about?');

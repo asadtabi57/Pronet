@@ -113,7 +113,6 @@
     // ✨ Draft intro — generate a warm connection note and carry it into the chat.
     const introBtn = document.getElementById('intro-btn');
     if (introBtn && window.AI) {
-      AI.feature('draft_intro').then(on => { if (!on) introBtn.style.display = 'none'; });
       introBtn.onclick = () => AI.assistant({
         title: `Draft an intro to ${data.name}`,
         insertLabel: '💬 Use in message',
@@ -129,7 +128,6 @@
     // ✨ AI Career Coach — gap analysis toward a target role.
     const careerBtn = document.getElementById('career-btn');
     if (careerBtn && window.AI) {
-      AI.feature('career_gap').then(on => { if (!on) careerBtn.style.display = 'none'; });
       careerBtn.onclick = () => openCareerCoach();
     }
   }
@@ -158,10 +156,9 @@
     const footer = `<button class="btn-fill" id="save-profile">Save</button>`;
     const m = openModal({ title: 'Edit profile', body, footer });
 
-    // ✨ Enhance headline/about with AI.
+    // ✨ Enhance headline/about with AI (always shown; guided message if AI off).
     m.el.querySelectorAll('.ai-enhance').forEach(btn => {
       if (!window.AI) { btn.style.display = 'none'; return; }
-      AI.feature('enhance').then(on => { if (!on) btn.style.display = 'none'; });
       btn.onclick = () => {
         const field = btn.dataset.field;
         const input = m.el.querySelector(field === 'headline' ? '#ed-headline' : '#ed-about');
