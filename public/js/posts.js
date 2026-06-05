@@ -337,17 +337,43 @@ async function openSendModal(p) {
 }
 
 // ===== LinkedIn-style share sheet (bottom-drawer on mobile, modal on desktop) =====
+// Post share — thin wrapper around the generalized core.
 async function openShareSheet(p) {
-  const url = `${location.origin}/feed.html#post-${p.id}`;
-  const text = `Check out this post on Pronet: ${url}`;
+  return openShareSheetCore({
+    url: `${location.origin}/feed.html#post-${p.id}`,
+    shareText: 'Check out this post on Pronet',
+    nativeTitle: 'Pronet post',
+    sendLabel: 'Send as message',
+    sendToConnection: async (to_user_id) => api(`/api/posts/${p.id}/send`, { method: 'POST', body: { to_user_id, note: '' } }),
+    onCopy: async () => { try { await api(`/api/posts/${p.id}/share`, { method: 'POST' }); } catch (e) {} },
+  });
+}
+
+// Profile share — same sheet, but shares a profile link and DMs that link.
+async function openProfileShareSheet(user) {
+  const url = `${location.origin}/profile.html?id=${user.id}`;
+  return openShareSheetCore({
+    url,
+    shareText: `Check out ${user.name}'s profile on Pronet`,
+    nativeTitle: `${user.name} on Pronet`,
+    sendLabel: 'Send profile to a connection',
+    sendToConnection: async (to_user_id) => api(`/api/messages/${to_user_id}`, { method: 'POST', body: { content: `Check out ${user.name}'s profile: ${url}` } }),
+  });
+}
+if (typeof window !== 'undefined') window.openProfileShareSheet = openProfileShareSheet;
+
+async function openShareSheetCore(cfg) {
+  const url = cfg.url;
+  const text = `${cfg.shareText}: ${url}`;
+  const sendTitle = cfg.sendLabel || 'Send as message';
 
   // Backdrop + sheet
   const back = document.createElement('div');
   back.className = 'share-back';
   back.innerHTML = `
-    <div class="share-sheet" role="dialog" aria-label="Share post">
+    <div class="share-sheet" role="dialog" aria-label="Share">
       <div class="share-grab"></div>
-      <h3 class="share-title">Send as message</h3>
+      <h3 class="share-title">${escapeHTML(sendTitle)}</h3>
       <div class="share-search">
         <input type="text" placeholder="Search connections" id="ss-search" />
       </div>
@@ -418,14 +444,14 @@ async function openShareSheet(p) {
     e.preventDefault();
     try { await navigator.clipboard.writeText(url); toast('Link copied!'); }
     catch { prompt('Copy this link:', url); }
-    await api(`/api/posts/${p.id}/share`, { method: 'POST' });
+    if (cfg.onCopy) await cfg.onCopy();
     close();
   };
   const nativeBtn = back.querySelector('[data-act="native"]');
   if (navigator.share) {
     nativeBtn.onclick = async (e) => {
       e.preventDefault();
-      try { await navigator.share({ title: 'Pronet post', text, url }); close(); }
+      try { await navigator.share({ title: cfg.nativeTitle || 'Pronet', text, url }); close(); }
       catch (err) {}
     };
   } else {
@@ -453,8 +479,9 @@ async function openShareSheet(p) {
         peopleEl.querySelectorAll('.share-person').forEach(node => {
           node.onclick = async () => {
             const to_user_id = +node.dataset.id;
-            await api(`/api/posts/${p.id}/send`, { method: 'POST', body: { to_user_id, note: '' } });
-            toast('Sent as message'); close();
+            try { await cfg.sendToConnection(to_user_id); toast('Sent as message'); }
+            catch (e) { toast(e.message || 'Could not send'); }
+            close();
           };
         });
       }

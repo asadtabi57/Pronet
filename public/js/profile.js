@@ -319,9 +319,12 @@
       if (editBtn) editBtn.onclick = () => openEditModal();
       const shareBtn = document.getElementById('share-btn');
       if (shareBtn) shareBtn.onclick = () => {
-        const url = location.origin + `/profile.html?id=${data.id}`;
-        if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Profile link copied!'), () => {});
-        else toast(url);
+        if (typeof openProfileShareSheet === 'function') openProfileShareSheet(data);
+        else {
+          const url = location.origin + `/profile.html?id=${data.id}`;
+          if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Profile link copied!'), () => {});
+          else toast(url);
+        }
       };
       const coverBtn = document.getElementById('cover-edit-btn');
       if (coverBtn) coverBtn.onclick = () => uploadCover();
