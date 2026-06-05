@@ -76,24 +76,31 @@
       </div>
     </section>
 
-    <!-- 2. Professional Tech Tree -->
-    <section class="feature-section" id="tech-tree-section">
+    <!-- 2. ATS Resume Analyzer -->
+    <section class="feature-section" id="ats-section">
       <div class="feature-head">
-        <h2>Your Professional Tech Tree</h2>
-        <p>A gamified map of your skills and projects. Tap an unlocked node to explore what you've built.</p>
+        <h2>✨ ATS Resume Analyzer</h2>
+        <p>Upload your PDF resume to get an instant ATS score, then let AI tailor it to any job — keyword-optimized and recruiter-ready.</p>
       </div>
-      <div class="card tt-card">
-        <div id="tech-tree-container"></div>
-      </div>
-    </section>
+      <div class="card ats-card" id="ats-card">
+        <div class="ats-setup" id="ats-setup">
+          <div class="ats-drop" id="ats-drop">
+            <input type="file" id="ats-file" accept="application/pdf,.pdf" hidden />
+            <div class="ats-drop-inner">
+              <div class="ats-drop-ic">📄</div>
+              <div class="ats-drop-text"><b id="ats-filename">Upload your resume (PDF)</b><span>Click to browse or drop a file here · max 5 MB</span></div>
+            </div>
+          </div>
+          <div class="field">
+            <label>Paste the job description <span class="ai-subtle">(optional, improves accuracy)</span></label>
+            <textarea id="ats-jd" rows="4" placeholder="Paste the job posting you're targeting…"></textarea>
+          </div>
+          <button class="btn-fill" id="ats-analyze" disabled>Analyze my resume</button>
+          <p class="ats-note" id="ats-note"></p>
+        </div>
 
-    <!-- 3. Tech Bites -->
-    <section class="feature-section" id="tech-bites-section">
-      <div class="feature-head">
-        <h2>Tech Bites — Meet up in Lahore</h2>
-        <p>Hand-picked spots for real-world tech meetups, sorted by the best high-protein pick.</p>
+        <div class="ats-result" id="ats-result" hidden></div>
       </div>
-      <div id="tech-bites-grid"></div>
     </section>
 
   </main>
@@ -103,7 +110,6 @@
   <script src="/js/calls.js"></script>
   <script src="/js/lounge.js"></script>
   <script src="/js/mock-interview.js"></script>
-  <script src="/js/techtree.js"></script>
-  <script src="/js/techbites.js"></script>
+  <script src="/js/ats.js"></script>
 </body>
 </html>

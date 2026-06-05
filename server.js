@@ -1502,6 +1502,62 @@ app.post('/api/ai/profile-score', authRequired, aiLimiter, wrap(async (req, res)
   }
 }));
 
+// --- ATS: resume score against a job description ---
+// Resume text is extracted client-side (pdf.js) and sent here as plain text, so
+// no server-side PDF parsing / file storage is needed.
+app.post('/api/ai/ats-score', authRequired, aiLimiter, wrap(async (req, res) => {
+  const resume = String((req.body && req.body.resumeText) || '').trim().slice(0, 12000);
+  const jd = String((req.body && req.body.jobDescription) || '').trim().slice(0, 6000);
+  if (resume.length < 60) return res.status(400).json({ error: 'Could not read enough text from the resume. Make sure it is a text-based PDF.' });
+  const system = 'You are an expert ATS (Applicant Tracking System) and technical recruiter. You evaluate resumes objectively and return strict JSON only.';
+  const prompt = `Evaluate this resume${jd ? ' against the job description' : ' for general ATS-friendliness'}.\n\n` +
+    `RESUME:\n"""${resume}"""\n\n${jd ? `JOB DESCRIPTION:\n"""${jd}"""\n\n` : ''}` +
+    `Return JSON exactly: {` +
+    `"score": <0-100 integer overall ATS match>, ` +
+    `"breakdown": {"keywords": <0-100>, "skills_match": <0-100>, "formatting": <0-100>, "experience": <0-100>}, ` +
+    `"matched_keywords": ["..."], "missing_keywords": ["..."], ` +
+    `"strengths": ["..."], "improvements": ["..."], ` +
+    `"summary": "2-sentence assessment"}. ` +
+    `Keep arrays to max 10 items.`;
+  try {
+    const data = await ai.generateJSON(prompt, { system, maxTokens: 900, temperature: 0.3 });
+    if (!data) return res.status(502).json({ error: 'Could not analyze the resume. Please try again.' });
+    const clampArr = a => Array.isArray(a) ? a.map(x => String(x).trim()).filter(Boolean).slice(0, 10) : [];
+    const b = data.breakdown || {};
+    res.json({
+      score: Math.max(0, Math.min(100, Number(data.score) || 0)),
+      breakdown: {
+        keywords: Math.max(0, Math.min(100, Number(b.keywords) || 0)),
+        skills_match: Math.max(0, Math.min(100, Number(b.skills_match) || 0)),
+        formatting: Math.max(0, Math.min(100, Number(b.formatting) || 0)),
+        experience: Math.max(0, Math.min(100, Number(b.experience) || 0)),
+      },
+      matched_keywords: clampArr(data.matched_keywords),
+      missing_keywords: clampArr(data.missing_keywords),
+      strengths: clampArr(data.strengths),
+      improvements: clampArr(data.improvements),
+      summary: String(data.summary || '').slice(0, 600),
+    });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- ATS: generate a tailored, ATS-optimized resume ---
+app.post('/api/ai/ats-tailor', authRequired, aiLimiter, wrap(async (req, res) => {
+  const resume = String((req.body && req.body.resumeText) || '').trim().slice(0, 12000);
+  const jd = String((req.body && req.body.jobDescription) || '').trim().slice(0, 6000);
+  if (resume.length < 60) return res.status(400).json({ error: 'Could not read enough text from the resume.' });
+  const system = 'You are an expert resume writer specializing in ATS optimization. You rewrite resumes to maximize keyword match and clarity while staying truthful to the candidate\'s real experience. Never invent employers, dates, or degrees.';
+  const prompt = `Rewrite and optimize this resume${jd ? ' to target the job description below' : ' for ATS-friendliness'}. ` +
+    `Use clean plain-text formatting with clear UPPERCASE section headers (SUMMARY, SKILLS, EXPERIENCE, EDUCATION, PROJECTS, CERTIFICATIONS as relevant), ` +
+    `bullet points starting with "- ", strong action verbs, and naturally weave in relevant keywords. ` +
+    `Keep it truthful — do not fabricate. Output ONLY the resume text.\n\n` +
+    `CURRENT RESUME:\n"""${resume}"""\n\n${jd ? `TARGET JOB:\n"""${jd}"""` : ''}`;
+  try {
+    const resumeOut = await ai.generateText(prompt, { system, maxTokens: 1800, temperature: 0.5 });
+    res.json({ resume: resumeOut.trim() });
+  } catch (e) { sendAIError(res, e); }
+}));
+
 
 app.get('/api/search', authRequired, wrap(async (req, res) => {
   const qstr = String(req.query.q || '').trim();
@@ -2773,6 +2829,7 @@ app.get('/api/ai/status', authRequired, wrap(async (req, res) => {
       enhance: ai.aiEnabled(), draft_post: ai.aiEnabled(), smart_replies: ai.aiEnabled(),
       draft_intro: ai.aiEnabled(), tone_guardian: ai.aiEnabled(), career_gap: ai.aiEnabled(),
       mock_interview: ai.aiEnabled(), feed_summary: ai.aiEnabled(), lead_scorer: ai.aiEnabled(),
+      ats: ai.aiEnabled(),
       // Smart match & semantic search work even without a key (local fallback).
       smart_match: true, semantic_search: true,
     },
