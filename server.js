@@ -191,6 +191,11 @@ function buildUserDTO(u, viewerId, connectionCount, rel) {
     location: u.location || '',
     experience: u.experience || [], education: u.education || [], skills: u.skills || [],
     cover_color: u.cover_color || '#a0c4ff',
+    cover_url: u.cover_url || null,
+    open_to_work: u.open_to_work ? 1 : 0,
+    open_to_work_roles: u.open_to_work_roles || '',
+    languages: u.languages || [], interests: u.interests || [],
+    featured_post_ids: u.featured_post_ids || [],
     subscription: u.subscription || null,
     connection_count: connectionCount || 0,
     online: isSelf ? isUserOnline(uid) : (onlineVisible ? isUserVisibleOnline(uid) : false),
@@ -225,6 +230,7 @@ const USER_DTO_FIELDS = [
   'id', 'name', 'email', 'headline', 'about', 'location',
   'experience', 'education', 'skills', 'avatar_color', 'cover_color',
   'avatar_url', 'subscription', 'last_seen',
+  'cover_url', 'open_to_work', 'open_to_work_roles', 'languages', 'interests', 'featured_post_ids',
   'is_online_visible', 'is_last_seen_visible', 'profile_visibility',
 ];
 const USER_DTO_COLS = USER_DTO_FIELDS.join(', ');
@@ -992,13 +998,17 @@ app.get('/api/me', authRequired, wrap(async (req, res) => {
 app.put('/api/me', authRequired, wrap(async (req, res) => {
   const u = await findUser(req.user.id);
   if (!u) return res.status(404).json({ error: 'Not found' });
-  const fields = ['name', 'headline', 'about', 'location'];
-  const jsonFields = ['experience', 'education', 'skills'];
+  const fields = ['name', 'headline', 'about', 'location', 'open_to_work_roles'];
+  const jsonFields = ['experience', 'education', 'skills', 'languages', 'interests', 'featured_post_ids'];
   const sets = [], params = [];
   let i = 1;
   for (const f of fields) if (req.body[f] !== undefined) { sets.push(`${f} = $${i++}`); params.push(req.body[f]); }
   for (const f of jsonFields) if (req.body[f] !== undefined) {
     sets.push(`${f} = $${i++}::jsonb`); params.push(JSON.stringify(req.body[f]));
+  }
+  // Boolean "open to work" toggle.
+  if (req.body.open_to_work !== undefined) {
+    sets.push(`open_to_work = $${i++}`); params.push(req.body.open_to_work ? 1 : 0);
   }
   if (sets.length) {
     params.push(u.id);
@@ -1169,6 +1179,16 @@ app.get('/api/users/:id', authRequired, wrap(async (req, res) => {
 // produce an anonymous "Someone viewed your profile" with no actor attached.
 const PROFILE_VIEW_THROTTLE_MS = 6 * 60 * 60 * 1000; // 6 hours
 async function recordProfileView(ownerId, viewer, anonymous) {
+  // Persist a distinct (owner, viewer) row for the "Who viewed your profile"
+  // card — bump count + timestamp on repeat visits. Best-effort.
+  q(`INSERT INTO profile_views (owner_id, viewer_id, anonymous, view_count, last_viewed_at)
+     VALUES ($1,$2,$3,1,$4)
+     ON CONFLICT (owner_id, viewer_id)
+     DO UPDATE SET view_count = profile_views.view_count + 1,
+                   last_viewed_at = EXCLUDED.last_viewed_at,
+                   anonymous = EXCLUDED.anonymous`,
+    [ownerId, viewer.id, anonymous ? 1 : 0, Date.now()]).catch(() => {});
+
   const cutoff = Date.now() - PROFILE_VIEW_THROTTLE_MS;
   if (anonymous) {
     // Anonymous: dedupe per-owner within the window (we deliberately store no
@@ -1192,7 +1212,297 @@ async function recordProfileView(ownerId, viewer, anonymous) {
   }
 }
 
-// --- Search ---
+// ===========================================================================
+// RICH PROFILE: extras, views, endorsements, projects, certifications, AI
+// ===========================================================================
+
+// One call that returns everything the redesigned profile page needs beyond the
+// core user DTO: endorsement tallies, projects, certifications, profile-view
+// count, and a completion score. Viewer-aware (my_endorsed flags).
+app.get('/api/users/:id/extras', authRequired, wrap(async (req, res) => {
+  const ownerId = Number(req.params.id);
+  const viewerId = req.user.id;
+  const owner = await findUser(ownerId);
+  if (!owner) return res.status(404).json({ error: 'User not found' });
+
+  const [endR, projR, certR, viewsR] = await Promise.all([
+    q(`SELECT skill,
+              COUNT(*)::int AS count,
+              BOOL_OR(endorser_id = $2) AS mine
+         FROM endorsements WHERE owner_id = $1 GROUP BY skill`, [ownerId, viewerId]),
+    q(`SELECT id, title, description, url, image_url, tags, sort_order
+         FROM projects WHERE user_id = $1 ORDER BY sort_order ASC, created_at DESC`, [ownerId]),
+    q(`SELECT id, name, issuer, issue_date, credential_url
+         FROM certifications WHERE user_id = $1 ORDER BY created_at DESC`, [ownerId]),
+    q(`SELECT COUNT(*)::int AS c FROM profile_views WHERE owner_id = $1`, [ownerId]),
+  ]);
+
+  const endorsements = {};
+  for (const r of endR.rows) endorsements[r.skill] = { count: r.count, mine: !!r.mine };
+  const projects = projR.rows.map(p => ({
+    id: Number(p.id), title: p.title, description: p.description || '',
+    url: p.url || '', image_url: p.image_url || '', tags: p.tags || [], sort_order: p.sort_order,
+  }));
+  const certifications = certR.rows.map(c => ({
+    id: Number(c.id), name: c.name, issuer: c.issuer || '',
+    issue_date: c.issue_date || '', credential_url: c.credential_url || '',
+  }));
+  res.json({
+    endorsements, projects, certifications,
+    profile_views: viewsR.rows[0] ? viewsR.rows[0].c : 0,
+    post_count: await postCount(ownerId),
+    completion: profileCompletion(owner, { projects, certifications }),
+  });
+}));
+
+async function postCount(uid) {
+  try { const r = await q(`SELECT COUNT(*)::int AS c FROM posts WHERE user_id = $1`, [uid]); return r.rows[0].c; }
+  catch (e) { return 0; }
+}
+
+// Profile "All-Star" completion score (0-100) + the next suggested steps.
+function profileCompletion(u, extras = {}) {
+  const checks = [
+    { key: 'avatar',   ok: !!u.avatar_url,                          label: 'Add a profile photo', weight: 15 },
+    { key: 'headline', ok: !!(u.headline && u.headline.length > 4), label: 'Write a headline',     weight: 10 },
+    { key: 'about',    ok: !!(u.about && u.about.length > 40),      label: 'Write an About section', weight: 15 },
+    { key: 'location', ok: !!u.location,                            label: 'Add your location',    weight: 5 },
+    { key: 'skills',   ok: Array.isArray(u.skills) && u.skills.length >= 3, label: 'Add at least 3 skills', weight: 15 },
+    { key: 'experience', ok: Array.isArray(u.experience) && u.experience.length >= 1, label: 'Add a work experience', weight: 15 },
+    { key: 'education', ok: Array.isArray(u.education) && u.education.length >= 1, label: 'Add your education', weight: 10 },
+    { key: 'projects', ok: (extras.projects || []).length >= 1,     label: 'Showcase a project',   weight: 8 },
+    { key: 'certs',    ok: (extras.certifications || []).length >= 1, label: 'Add a certification', weight: 7 },
+  ];
+  let score = 0; const todo = [];
+  for (const c of checks) { if (c.ok) score += c.weight; else todo.push({ key: c.key, label: c.label }); }
+  let tier = 'Beginner';
+  if (score >= 90) tier = 'All-Star';
+  else if (score >= 70) tier = 'Advanced';
+  else if (score >= 45) tier = 'Intermediate';
+  return { score: Math.min(100, score), tier, todo: todo.slice(0, 4) };
+}
+
+// --- Who viewed your profile (owner-only) ---
+app.get('/api/me/profile-views', authRequired, wrap(async (req, res) => {
+  const r = await q(
+    `SELECT viewer_id, anonymous, view_count, last_viewed_at
+       FROM profile_views WHERE owner_id = $1
+       ORDER BY last_viewed_at DESC LIMIT 30`, [req.user.id]);
+  const namedIds = r.rows.filter(x => !x.anonymous).map(x => x.viewer_id);
+  const userMap = await publicUsersByIds(namedIds, req.user.id);
+  const total = await q(`SELECT COUNT(*)::int AS c FROM profile_views WHERE owner_id = $1`, [req.user.id]);
+  const viewers = r.rows.map(x => ({
+    anonymous: !!x.anonymous,
+    view_count: x.view_count,
+    last_viewed_at: Number(x.last_viewed_at),
+    user: x.anonymous ? null : (userMap.get(Number(x.viewer_id)) || null),
+  }));
+  res.json({ viewers, total: total.rows[0].c });
+}));
+
+// --- People also viewed (reuses smart-match vectors; falls back to suggestions) ---
+app.get('/api/users/:id/also-viewed', authRequired, wrap(async (req, res) => {
+  const ownerId = Number(req.params.id);
+  const owner = await findUser(ownerId);
+  if (!owner) return res.status(404).json({ error: 'Not found' });
+  let rows = null;
+  if (await vectorSearchReady()) {
+    let vecLit, provider = ai.embeddingProvider();
+    if (owner.embedding && owner.embedding_provider === provider) {
+      vecLit = typeof owner.embedding === 'string' ? owner.embedding : ai.toVectorLiteral(owner.embedding);
+    } else {
+      const emb = await ai.generateEmbedding(ai.profileEmbedText(owner));
+      vecLit = ai.toVectorLiteral(emb.vector); provider = emb.provider;
+    }
+    rows = await nearestUsers({ vectorLiteral: vecLit, provider, excludeIds: [ownerId, req.user.id], limit: 6 });
+  }
+  if (!rows) {
+    // Fallback: a few other users.
+    const r = await q(`SELECT id FROM users WHERE id <> $1 AND id <> $2 ORDER BY created_at DESC LIMIT 6`, [ownerId, req.user.id]);
+    rows = r.rows;
+  }
+  const ids = rows.map(r => Number(r.id));
+  const map = await publicUsersByIds(ids, req.user.id);
+  const people = ids.map(id => map.get(id)).filter(Boolean);
+  res.json({ people });
+}));
+
+// --- Skill endorsements ---
+app.post('/api/users/:id/endorse', authRequired, wrap(async (req, res) => {
+  const ownerId = Number(req.params.id);
+  const skill = String((req.body && req.body.skill) || '').trim().slice(0, 80);
+  if (!skill) return res.status(400).json({ error: 'Skill required' });
+  if (ownerId === req.user.id) return res.status(400).json({ error: 'You cannot endorse yourself.' });
+  const owner = await findUser(ownerId);
+  if (!owner) return res.status(404).json({ error: 'User not found' });
+  // Toggle: if already endorsed, remove it; else add.
+  const ex = await q(`SELECT id FROM endorsements WHERE owner_id=$1 AND endorser_id=$2 AND skill=$3`, [ownerId, req.user.id, skill]);
+  let mine;
+  if (ex.rowCount) {
+    await q(`DELETE FROM endorsements WHERE owner_id=$1 AND endorser_id=$2 AND skill=$3`, [ownerId, req.user.id, skill]);
+    mine = false;
+  } else {
+    await q(`INSERT INTO endorsements (owner_id, endorser_id, skill, created_at) VALUES ($1,$2,$3,$4)
+             ON CONFLICT DO NOTHING`, [ownerId, req.user.id, skill, Date.now()]);
+    mine = true;
+    notify(ownerId, 'endorsement', req.user.id, { skill }).catch(() => {});
+  }
+  const cnt = await q(`SELECT COUNT(*)::int AS c FROM endorsements WHERE owner_id=$1 AND skill=$2`, [ownerId, skill]);
+  res.json({ skill, count: cnt.rows[0].c, mine });
+}));
+
+// --- Projects CRUD (owner-only) ---
+app.post('/api/me/projects', authRequired, wrap(async (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title || '').trim().slice(0, 160);
+  if (!title) return res.status(400).json({ error: 'Title required' });
+  const tags = Array.isArray(b.tags) ? b.tags.map(t => String(t).trim()).filter(Boolean).slice(0, 12) : [];
+  const r = await q(
+    `INSERT INTO projects (user_id, title, description, url, image_url, tags, sort_order, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING id`,
+    [req.user.id, sanitizeText(title), sanitizeText(String(b.description || '').slice(0, 1000)),
+     String(b.url || '').slice(0, 500), String(b.image_url || '').slice(0, 500),
+     JSON.stringify(tags), Number(b.sort_order) || 0, Date.now()]);
+  res.json({ id: Number(r.rows[0].id) });
+}));
+app.put('/api/me/projects/:pid', authRequired, wrap(async (req, res) => {
+  const pid = Number(req.params.pid);
+  const own = await q(`SELECT user_id FROM projects WHERE id=$1`, [pid]);
+  if (!own.rowCount) return res.status(404).json({ error: 'Not found' });
+  if (Number(own.rows[0].user_id) !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  const b = req.body || {};
+  const tags = Array.isArray(b.tags) ? b.tags.map(t => String(t).trim()).filter(Boolean).slice(0, 12) : [];
+  await q(`UPDATE projects SET title=$1, description=$2, url=$3, image_url=$4, tags=$5::jsonb WHERE id=$6`,
+    [sanitizeText(String(b.title || '').slice(0, 160)), sanitizeText(String(b.description || '').slice(0, 1000)),
+     String(b.url || '').slice(0, 500), String(b.image_url || '').slice(0, 500), JSON.stringify(tags), pid]);
+  res.json({ ok: true });
+}));
+app.delete('/api/me/projects/:pid', authRequired, wrap(async (req, res) => {
+  const pid = Number(req.params.pid);
+  const own = await q(`SELECT user_id FROM projects WHERE id=$1`, [pid]);
+  if (!own.rowCount) return res.status(404).json({ error: 'Not found' });
+  if (Number(own.rows[0].user_id) !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  await q(`DELETE FROM projects WHERE id=$1`, [pid]);
+  res.json({ ok: true });
+}));
+
+// --- Certifications CRUD (owner-only) ---
+app.post('/api/me/certifications', authRequired, wrap(async (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 160);
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const r = await q(
+    `INSERT INTO certifications (user_id, name, issuer, issue_date, credential_url, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [req.user.id, sanitizeText(name), sanitizeText(String(b.issuer || '').slice(0, 160)),
+     String(b.issue_date || '').slice(0, 40), String(b.credential_url || '').slice(0, 500), Date.now()]);
+  res.json({ id: Number(r.rows[0].id) });
+}));
+app.delete('/api/me/certifications/:cid', authRequired, wrap(async (req, res) => {
+  const cid = Number(req.params.cid);
+  const own = await q(`SELECT user_id FROM certifications WHERE id=$1`, [cid]);
+  if (!own.rowCount) return res.status(404).json({ error: 'Not found' });
+  if (Number(own.rows[0].user_id) !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  await q(`DELETE FROM certifications WHERE id=$1`, [cid]);
+  res.json({ ok: true });
+}));
+
+// --- Cover photo upload (base64 → Supabase Storage; mirrors avatar flow) ---
+app.post('/api/me/cover', authRequired, wrap(async (req, res) => {
+  const { data_url } = req.body || {};
+  if (!data_url || typeof data_url !== 'string') return res.status(400).json({ error: 'data_url required' });
+  const m = data_url.match(/^data:(image\/(png|jpe?g|gif|webp));base64,(.+)$/i);
+  if (!m) return res.status(400).json({ error: 'Invalid image (png/jpg/gif/webp only)' });
+  const mime = m[1].toLowerCase();
+  const ext = m[2].toLowerCase() === 'jpeg' ? 'jpg' : m[2].toLowerCase();
+  const buf = Buffer.from(m[3], 'base64');
+  if (buf.length > 5 * 1024 * 1024) return res.status(413).json({ error: 'Image too large (max 5 MB)' });
+  const filename = `cover_${req.user.id}_${Date.now()}.${ext}`;
+  let url;
+  try {
+    if (storage.enabled()) {
+      const prev = await findUser(req.user.id);
+      if (prev && prev.cover_url && storage.isSupabaseUrl(prev.cover_url)) storage.deleteAvatar(prev.cover_url).catch(() => {});
+      url = await storage.uploadAvatar(filename, buf, mime);
+    } else {
+      const uploads = path.join(__dirname, 'public', 'uploads');
+      if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
+      fs.writeFileSync(path.join(uploads, filename), buf);
+      url = `/uploads/${filename}`;
+    }
+  } catch (e) {
+    console.error('Cover upload failed:', e.message);
+    return res.status(502).json({ error: 'Upload failed' });
+  }
+  await q(`UPDATE users SET cover_url = $1 WHERE id = $2`, [url, req.user.id]);
+  const u = await findUser(req.user.id);
+  res.json({ user: await publicUser(u, u.id) });
+}));
+app.delete('/api/me/cover', authRequired, wrap(async (req, res) => {
+  const u = await findUser(req.user.id);
+  if (u && u.cover_url) {
+    if (storage.isSupabaseUrl(u.cover_url)) storage.deleteAvatar(u.cover_url).catch(() => {});
+    else if (u.cover_url.startsWith('/uploads/')) { try { fs.unlinkSync(path.join(__dirname, 'public', u.cover_url.replace(/^\//, ''))); } catch (e) {} }
+    await q(`UPDATE users SET cover_url = NULL WHERE id = $1`, [req.user.id]);
+  }
+  const fresh = await findUser(req.user.id);
+  res.json({ user: await publicUser(fresh, fresh.id) });
+}));
+
+// --- AI: complete my profile (drafts about + headline + skills from notes) ---
+app.post('/api/ai/complete-profile', authRequired, aiLimiter, wrap(async (req, res) => {
+  const meRow = await findUser(req.user.id);
+  const notes = String((req.body && req.body.notes) || '').trim().slice(0, 1500);
+  const seed = notes || ai.profileEmbedText(meRow);
+  if (!seed) return res.status(400).json({ error: 'Add a few notes about yourself first.' });
+  const prompt = `Based on this info about a professional, produce profile content.\n\nINFO:\n${seed}\n\n` +
+    `Return JSON: {"headline":"<max 120 chars>","about":"<2-4 sentence first-person About>","skills":["s1","s2","s3","s4","s5","s6"]}.`;
+  try {
+    const data = await ai.generateJSON(prompt, { maxTokens: 700, temperature: 0.7 });
+    if (!data) return res.status(502).json({ error: 'Could not generate profile content. Try again.' });
+    res.json({
+      headline: String(data.headline || '').slice(0, 160),
+      about: String(data.about || '').slice(0, 1200),
+      skills: Array.isArray(data.skills) ? data.skills.map(s => String(s).trim()).filter(Boolean).slice(0, 10) : [],
+    });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- AI: profile score (qualitative review + suggestions) ---
+app.post('/api/ai/profile-score', authRequired, aiLimiter, wrap(async (req, res) => {
+  const meRow = await findUser(req.user.id);
+  const [proj, cert] = await Promise.all([
+    q(`SELECT title FROM projects WHERE user_id=$1`, [req.user.id]),
+    q(`SELECT name FROM certifications WHERE user_id=$1`, [req.user.id]),
+  ]);
+  const completion = profileCompletion(meRow, { projects: proj.rows, certifications: cert.rows });
+  if (!ai.aiEnabled()) {
+    return res.json({ score: completion.score, tier: completion.tier,
+      review: `Your profile is ${completion.score}% complete (${completion.tier}).`,
+      suggestions: completion.todo.map(t => t.label), ai: false });
+  }
+  const prompt = `Review this professional profile and give brief, actionable feedback.\n` +
+    `Headline: ${meRow.headline || '(none)'}\nAbout: ${meRow.about || '(none)'}\n` +
+    `Skills: ${(meRow.skills || []).join(', ') || '(none)'}\n` +
+    `Experience entries: ${(meRow.experience || []).length}; Education: ${(meRow.education || []).length}; ` +
+    `Projects: ${proj.rowCount}; Certifications: ${cert.rowCount}.\n\n` +
+    `Return JSON: {"review":"2-sentence assessment","suggestions":["tip1","tip2","tip3"]}.`;
+  try {
+    const data = await ai.generateJSON(prompt, { maxTokens: 300, temperature: 0.6 });
+    res.json({
+      score: completion.score, tier: completion.tier,
+      review: (data && data.review) || `Your profile is ${completion.score}% complete.`,
+      suggestions: (data && Array.isArray(data.suggestions)) ? data.suggestions.slice(0, 4) : completion.todo.map(t => t.label),
+      ai: true,
+    });
+  } catch (e) {
+    res.json({ score: completion.score, tier: completion.tier,
+      review: `Your profile is ${completion.score}% complete (${completion.tier}).`,
+      suggestions: completion.todo.map(t => t.label), ai: false });
+  }
+}));
+
+
 app.get('/api/search', authRequired, wrap(async (req, res) => {
   const qstr = String(req.query.q || '').trim();
   if (!qstr) return res.json({ people: [], posts: [] });

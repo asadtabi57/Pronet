@@ -15,6 +15,7 @@
     new_post: 'shared a new post',
     message: 'sent you a message',
     reaction: 'reacted to your message',
+    endorsement: 'endorsed a skill on your profile',
     profile_view: 'viewed your profile',
     profile_view_anon: 'viewed your profile',
   };
@@ -29,6 +30,7 @@
     connect_accepted: n => `/profile.html?id=${n.actor_id}`,
     message: n => `/messages.html?user=${n.actor_id}`,
     reaction: n => `/messages.html?user=${n.actor_id}`,
+    endorsement: n => `/profile.html?id=${n.actor_id}`,
     profile_view: n => `/profile.html?id=${n.actor_id}`,
   };
 
