@@ -13,6 +13,7 @@
       <div class="card profile-card" id="me-card"></div>
     </aside>
     <section>
+      <div id="ai-digest"></div>
       <div class="card">
         <div class="composer">
           <div id="composer-avatar"></div>
@@ -28,6 +29,7 @@
         <div class="composer-actions">
           <div class="composer-toolbar">
             <button id="toggle-media">📎 Add media</button>
+            <button type="button" id="ai-write-btn" class="ai-btn ai-btn-tiny" title="Draft with AI">✨ <span>Write with AI</span></button>
           </div>
           <button id="post-btn" class="btn-fill">Post</button>
         </div>
@@ -43,6 +45,7 @@
   </main>
 
   <script src="/js/app.js"></script>
+  <script src="/js/ai.js"></script>
   <script src="/js/calls.js"></script>
   <script src="/js/posts.js"></script>
   <script src="/js/feed.js"></script>

@@ -31,6 +31,8 @@
       status.innerHTML = '';
     }
 
+    loadLeadDashboard(!!(subscription && !subscription.cancelled_at));
+
     const plansEl = document.getElementById('plans');
     plansEl.innerHTML = plans.map((p, i) => `
       <div class="plan-card ${i === 1 ? 'featured' : ''}">
@@ -135,6 +137,52 @@
         refresh();
       } catch (e) { err.textContent = e.message; }
     };
+  }
+
+  // ✨ AI Lead Signals — premium-only dashboard of high-intent prospects.
+  async function loadLeadDashboard(isPremium) {
+    const box = document.getElementById('lead-dashboard');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!isPremium) return; // gated for premium members
+    if (window.AI && !(await AI.feature('lead_scorer'))) return; // AI off → nothing to show
+    let leads = [];
+    try { ({ leads } = await api('/api/ai/leads')); }
+    catch (e) { return; }
+    const labelMap = {
+      job_search: '🔍 Job searching',
+      tool_need: '🛠️ Evaluating tools',
+      career_transition: '🚀 Career transition',
+    };
+    box.innerHTML = `
+      <div class="card lead-dash">
+        <div class="lead-dash-head">
+          <h3>✨ AI Lead Signals <span class="premium-badge">PREMIUM</span></h3>
+          <p>People whose recent posts suggest they're open to a move or a new tool.</p>
+        </div>
+        <div class="lead-list" id="lead-list">
+          ${leads.length ? '' : '<p class="empty">No signals yet. As your network posts, high-intent prospects will appear here.</p>'}
+        </div>
+      </div>`;
+    if (leads.length) {
+      document.getElementById('lead-list').innerHTML = leads.map(l => {
+        const a = l.author || { name: 'Someone', avatar_color: '#888' };
+        const conf = (l.confidence || 'low');
+        return `
+          <div class="lead-row">
+            ${avatar(a, 'md')}
+            <div class="lead-info">
+              <div class="lead-name"><a href="/profile.html?id=${a.id}">${escapeHTML(a.name)}</a>
+                <span class="lead-tag ${l.signal_type}">${labelMap[l.signal_type] || l.signal_type}</span>
+                <span class="lead-conf conf-${conf}">${conf}</span>
+              </div>
+              <div class="lead-snippet">${escapeHTML(l.snippet || '')}</div>
+              <div class="lead-time">${timeAgo(l.created_at)}</div>
+            </div>
+            <a class="btn-tiny" href="/messages.html?user=${a.id}">💬 Reach out</a>
+          </div>`;
+      }).join('');
+    }
   }
 
   refresh();

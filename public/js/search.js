@@ -6,8 +6,16 @@
   const root = document.getElementById('results');
   if (!q.trim()) { root.innerHTML = '<div class="card empty">Type a search query in the top bar.</div>'; return; }
 
-  const { people, posts } = await api('/api/search?q=' + encodeURIComponent(q));
+  const { people, posts, semantic_people } = await api('/api/search?q=' + encodeURIComponent(q));
   document.getElementById('global-search').value = q;
+
+  // Semantic matches the keyword pass missed (AI/vector-powered).
+  const sem = (semantic_people || []);
+  const semHTML = sem.length ? `
+    <div class="section">
+      <h3 class="ai-section-title">✨ Related people <span class="ai-subtle">semantic matches</span></h3>
+      <div class="card card-pad" id="sem-list"></div>
+    </div>` : '';
 
   root.innerHTML = `
     <h2 class="section-title">Search results for "${escapeHTML(q)}"</h2>
@@ -17,6 +25,7 @@
         ${people.length ? '' : '<p class="empty">No people matched.</p>'}
       </div>
     </div>
+    ${semHTML}
     <div class="section">
       <h3>Posts (${posts.length})</h3>
       <div id="post-list">
@@ -24,26 +33,27 @@
       </div>
     </div>`;
 
-  if (people.length) {
-    document.getElementById('ppl-list').innerHTML = people.map(p => {
-      let btn;
-      if (p.connected)        btn = '<button class="btn-tiny" disabled>✓ Connected</button>';
-      else if (p.pending_out) btn = '<button class="btn-tiny" disabled>Pending</button>';
-      else if (p.pending_in)  btn = '<button class="btn-fill accept-btn">Accept</button>';
-      else                    btn = '<button class="btn-fill connect-btn">+ Connect</button>';
-      return `
+  function personRow(p, opts = {}) {
+    let btn;
+    if (p.connected)        btn = '<button class="btn-tiny" disabled>✓ Connected</button>';
+    else if (p.pending_out) btn = '<button class="btn-tiny" disabled>Pending</button>';
+    else if (p.pending_in)  btn = '<button class="btn-fill accept-btn">Accept</button>';
+    else                    btn = '<button class="btn-fill connect-btn">+ Connect</button>';
+    const badge = opts.score != null ? `<span class="match-badge" title="Similarity">✨ ${opts.score}%</span>` : '';
+    return `
       <div class="person" data-id="${p.id}">
         ${avatar(p, 'md')}
         <div class="info">
-          <div class="name"><a href="/profile.html?id=${p.id}">${escapeHTML(p.name)}</a></div>
+          <div class="name"><a href="/profile.html?id=${p.id}">${escapeHTML(p.name)}</a> ${badge}</div>
           <div class="headline">${escapeHTML(p.headline || '')}</div>
           <div class="headline">${escapeHTML(p.location || '')}</div>
         </div>
         ${btn}
         <a class="btn-tiny" href="/profile.html?id=${p.id}">View</a>
       </div>`;
-    }).join('');
-    document.querySelectorAll('#ppl-list .connect-btn').forEach(btn => {
+  }
+  function wirePeople(container) {
+    container.querySelectorAll('.connect-btn').forEach(btn => {
       btn.onclick = async () => {
         const id = btn.closest('.person').dataset.id;
         await api(`/api/people/${id}/connect`, { method: 'POST' });
@@ -51,7 +61,7 @@
         toast('Request sent');
       };
     });
-    document.querySelectorAll('#ppl-list .accept-btn').forEach(btn => {
+    container.querySelectorAll('.accept-btn').forEach(btn => {
       btn.onclick = async () => {
         const id = btn.closest('.person').dataset.id;
         await api(`/api/connections/${id}/accept`, { method: 'POST' });
@@ -59,6 +69,17 @@
         toast('Connected!');
       };
     });
+  }
+
+  if (people.length) {
+    const el = document.getElementById('ppl-list');
+    el.innerHTML = people.map(p => personRow(p)).join('');
+    wirePeople(el);
+  }
+  if (sem.length) {
+    const el = document.getElementById('sem-list');
+    el.innerHTML = sem.map(p => personRow(p, { score: p.match_score })).join('');
+    wirePeople(el);
   }
 
   if (posts.length) {

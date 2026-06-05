@@ -207,6 +207,7 @@ async function toggleComments(el, id) {
     const input = ev.target.querySelector('input');
     const v = input.value.trim();
     if (!v) return;
+    if (window.AI && !(await AI.tonePrecheck(v))) return;
     await api(`/api/posts/${id}/comments`, { method: 'POST', body: { content: v } });
     input.value = '';
     box.hidden = true; toggleComments(el, id);

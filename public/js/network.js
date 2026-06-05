@@ -88,5 +88,30 @@
     });
   }
 
-  loadRequests(); loadConnections(); loadSuggestions();
+  async function loadSmartMatches() {
+    const el = document.getElementById('smart-matches');
+    const head = document.getElementById('smart-head');
+    if (!el) return;
+    try {
+      const { matches } = await api('/api/network/smart-matches');
+      const list = (matches || []).filter(p => !p.connected && !p.pending_in && !p.pending_out);
+      if (!list.length) { el.innerHTML = ''; if (head) head.style.display = 'none'; return; }
+      if (head) head.style.display = '';
+      el.innerHTML = `<div class="person-grid">${list.map(p => personCard({ ...p },
+        `<span class="match-badge" title="Profile similarity">✨ ${p.match_score}% match</span>` +
+        (p.pending_out
+          ? `<button class="btn-tiny ghost" disabled>Pending</button>`
+          : `<button class="btn-fill connect-btn">+ Connect</button>`)
+      )).join('')}</div>`;
+      el.querySelectorAll('.person-card .connect-btn').forEach(btn => {
+        btn.onclick = async () => {
+          const card = btn.closest('.person-card');
+          await api(`/api/people/${card.dataset.id}/connect`, { method: 'POST' });
+          toast('Request sent'); loadSmartMatches();
+        };
+      });
+    } catch (e) { if (head) head.style.display = 'none'; }
+  }
+
+  loadRequests(); loadConnections(); loadSuggestions(); loadSmartMatches();
 })();

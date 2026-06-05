@@ -10,6 +10,43 @@
   <header class="app-nav" id="top-nav"></header>
   <main class="lounge-page" style="max-width: var(--container)">
 
+    <!-- 0. AI Mock Interview -->
+    <section class="feature-section" id="ai-interview-section">
+      <div class="feature-head">
+        <h2>✨ AI Mock Interview</h2>
+        <p>Practice out loud with an AI hiring manager. Speak or type your answers and get a scorecard at the end.</p>
+      </div>
+      <div class="card mi-card" id="mi-card">
+        <div class="mi-setup" id="mi-setup">
+          <div class="field">
+            <label>Role you're interviewing for</label>
+            <input id="mi-role" placeholder="e.g. Frontend Engineer" />
+          </div>
+          <div class="field">
+            <label>Paste a job description <span class="ai-subtle">(optional)</span></label>
+            <textarea id="mi-jd" rows="3" placeholder="Paste responsibilities / requirements to tailor the questions…"></textarea>
+          </div>
+          <button class="btn-fill" id="mi-start">Start interview</button>
+          <p class="mi-note" id="mi-voice-note"></p>
+        </div>
+
+        <div class="mi-live" id="mi-live" hidden>
+          <div class="mi-transcript" id="mi-transcript"></div>
+          <div class="mi-controls">
+            <button type="button" class="mi-mic" id="mi-mic" title="Hold to speak" aria-label="Speak your answer">🎤</button>
+            <textarea id="mi-answer" rows="1" placeholder="Type your answer, or use the mic…"></textarea>
+            <button type="button" class="btn-fill" id="mi-send">Send</button>
+          </div>
+          <div class="mi-actions">
+            <button type="button" class="btn-tiny ghost" id="mi-end">End & get scorecard</button>
+            <label class="mi-tts-toggle"><input type="checkbox" id="mi-tts" checked /> 🔊 Read questions aloud</label>
+          </div>
+        </div>
+
+        <div class="mi-score" id="mi-score" hidden></div>
+      </div>
+    </section>
+
     <!-- 1. Co-Working Lounge -->
     <section class="feature-section" id="coworking-lounge">
       <div class="feature-head">
@@ -62,8 +99,10 @@
   </main>
 
   <script src="/js/app.js"></script>
+  <script src="/js/ai.js"></script>
   <script src="/js/calls.js"></script>
   <script src="/js/lounge.js"></script>
+  <script src="/js/mock-interview.js"></script>
   <script src="/js/techtree.js"></script>
   <script src="/js/techbites.js"></script>
 </body>

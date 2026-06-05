@@ -32,12 +32,47 @@
     const content = ta.value.trim();
     const url = mediaUrl.value.trim();
     if (!content && !url) { toast('Write something or add media'); return; }
+    // Tone Guardian: gentle pre-send check (no-op if AI is unavailable).
+    if (content && window.AI && !(await AI.tonePrecheck(content))) return;
     await api('/api/posts', { method: 'POST', body: {
       content, media_type: url ? mediaType.value : null, media_url: url || null,
     }});
     ta.value = ''; mediaUrl.value = ''; mediaInput.classList.remove('active');
     loadPosts();
   };
+
+  // ✨ Write with AI — draft a post from a short topic.
+  const aiWriteBtn = document.getElementById('ai-write-btn');
+  if (aiWriteBtn && window.AI) {
+    AI.feature('draft_post').then(on => { if (!on) aiWriteBtn.style.display = 'none'; });
+    aiWriteBtn.onclick = () => {
+      const topic = ta.value.trim();
+      const seed = topic || prompt('What should the post be about?');
+      if (!seed) return;
+      AI.assistant({
+        title: 'Write a post',
+        insertLabel: 'Use this post',
+        run: async () => (await api('/api/ai/draft-post', { method: 'POST', body: { topic: seed } })).text,
+        onInsert: (text) => { ta.value = text; ta.focus(); },
+      });
+    };
+  }
+
+  // Network TL;DR digest card (shows only when AI is enabled & there's enough activity).
+  (async () => {
+    if (!window.AI || !(await AI.feature('feed_summary'))) return;
+    try {
+      const r = await api('/api/ai/feed-summary');
+      if (!r || !r.summary) return;
+      const box = document.getElementById('ai-digest');
+      if (!box) return;
+      box.innerHTML = `<div class="card ai-digest-card">
+        <div class="ai-digest-head">${AI.SPARKLE} <span>Your network TL;DR</span><button class="ai-digest-x" aria-label="Dismiss">×</button></div>
+        <div class="ai-digest-body">${escapeHTML(r.summary).replace(/\n/g, '<br>')}</div>
+      </div>`;
+      box.querySelector('.ai-digest-x').onclick = () => { box.innerHTML = ''; };
+    } catch (e) {}
+  })();
 
   const postsEl = document.getElementById('posts');
 

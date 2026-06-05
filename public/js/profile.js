@@ -17,9 +17,11 @@
     return '+ Connect';
   }
   const actions = isMe
-    ? `<button class="btn-tiny" id="edit-btn">✎ Edit profile</button>`
+    ? `<button class="btn-tiny" id="edit-btn">✎ Edit profile</button>
+       <button class="ai-btn ai-btn-tiny" id="career-btn" title="AI Career Coach">✨ <span>Career coach</span></button>`
     : `<button class="btn-fill" id="connect-btn">${profileBtnLabel(data)}</button>
-       <button class="btn-tiny" id="message-btn">💬 Message</button>`;
+       <button class="btn-tiny" id="message-btn">💬 Message</button>
+       <button class="ai-btn ai-btn-tiny" id="intro-btn" title="Draft a connection note with AI">✨ <span>Draft intro</span></button>`;
 
   root.innerHTML = `
     <article class="card profile-hero">
@@ -107,8 +109,29 @@
     };
     if (data.pending_out) document.getElementById('connect-btn').disabled = true;
     document.getElementById('message-btn').onclick = () => location.href = `/messages.html?user=${data.id}`;
+
+    // ✨ Draft intro — generate a warm connection note and carry it into the chat.
+    const introBtn = document.getElementById('intro-btn');
+    if (introBtn && window.AI) {
+      AI.feature('draft_intro').then(on => { if (!on) introBtn.style.display = 'none'; });
+      introBtn.onclick = () => AI.assistant({
+        title: `Draft an intro to ${data.name}`,
+        insertLabel: '💬 Use in message',
+        run: async () => (await api('/api/ai/draft-intro', { method: 'POST', body: { targetUserId: data.id } })).text,
+        onInsert: (text) => {
+          try { sessionStorage.setItem('pronet_msg_draft', JSON.stringify({ userId: data.id, text })); } catch (e) {}
+          location.href = `/messages.html?user=${data.id}`;
+        },
+      });
+    }
   } else {
     document.getElementById('edit-btn').onclick = () => openEditModal(data);
+    // ✨ AI Career Coach — gap analysis toward a target role.
+    const careerBtn = document.getElementById('career-btn');
+    if (careerBtn && window.AI) {
+      AI.feature('career_gap').then(on => { if (!on) careerBtn.style.display = 'none'; });
+      careerBtn.onclick = () => openCareerCoach();
+    }
   }
 
   function openEditModal(u) {
@@ -128,12 +151,30 @@
         </div>
       </div>
       <div class="field"><label>Name</label><input id="ed-name" value="${escapeHTML(u.name)}"/></div>
-      <div class="field"><label>Headline</label><input id="ed-headline" value="${escapeHTML(u.headline || '')}"/></div>
+      <div class="field"><label class="ai-field-label">Headline <button type="button" class="ai-btn ai-btn-tiny ai-enhance" data-field="headline" title="Enhance with AI">✨</button></label><input id="ed-headline" value="${escapeHTML(u.headline || '')}"/></div>
       <div class="field"><label>Location</label><input id="ed-location" value="${escapeHTML(u.location || '')}"/></div>
-      <div class="field"><label>About</label><textarea id="ed-about" rows="5">${escapeHTML(u.about || '')}</textarea></div>
+      <div class="field"><label class="ai-field-label">About <button type="button" class="ai-btn ai-btn-tiny ai-enhance" data-field="about" title="Enhance with AI">✨</button></label><textarea id="ed-about" rows="5">${escapeHTML(u.about || '')}</textarea></div>
       <div class="field"><label>Skills (comma-separated)</label><input id="ed-skills" value="${escapeHTML((u.skills || []).join(', '))}"/></div>`;
     const footer = `<button class="btn-fill" id="save-profile">Save</button>`;
     const m = openModal({ title: 'Edit profile', body, footer });
+
+    // ✨ Enhance headline/about with AI.
+    m.el.querySelectorAll('.ai-enhance').forEach(btn => {
+      if (!window.AI) { btn.style.display = 'none'; return; }
+      AI.feature('enhance').then(on => { if (!on) btn.style.display = 'none'; });
+      btn.onclick = () => {
+        const field = btn.dataset.field;
+        const input = m.el.querySelector(field === 'headline' ? '#ed-headline' : '#ed-about');
+        const notes = (input.value || '').trim();
+        if (!notes) { toast('Type a few words first, then enhance.'); input.focus(); return; }
+        AI.assistant({
+          title: field === 'headline' ? 'Enhance headline' : 'Enhance About',
+          insertLabel: 'Replace',
+          run: async () => (await api('/api/ai/enhance-profile', { method: 'POST', body: { field, notes } })).text,
+          onInsert: (text) => { input.value = text; input.focus(); },
+        });
+      };
+    });
 
     const fileInput = m.el.querySelector('#ed-avatar-file');
     const previewBox = m.el.querySelector('#ed-avatar-preview');
@@ -173,5 +214,38 @@
       const r = await api('/api/me', { method: 'PUT', body: updates });
       setMe(r.user); m.close(); location.reload();
     };
+  }
+
+  // ✨ AI Career Coach — enter a target role, get a data-driven gap analysis.
+  function openCareerCoach() {
+    const body = `
+      <p class="ai-coach-intro">Tell me the role you're aiming for and I'll compare your profile to people already in that role.</p>
+      <div class="field"><label>Target role</label>
+        <input id="cc-role" placeholder="e.g. Senior Frontend Engineer" />
+      </div>
+      <button type="button" class="btn-fill" id="cc-go" style="width:100%">Analyze my path</button>
+      <div id="cc-out" class="ai-coach-out" hidden></div>`;
+    const m = openModal({ title: '✨ AI Career Coach', body });
+    const roleInput = m.el.querySelector('#cc-role');
+    const out = m.el.querySelector('#cc-out');
+    const go = m.el.querySelector('#cc-go');
+    roleInput.focus();
+    const run = async () => {
+      const targetRole = roleInput.value.trim();
+      if (!targetRole) { roleInput.focus(); return; }
+      out.hidden = false;
+      out.innerHTML = `<div class="ai-loading"><span class="ai-spinner"></span> Analyzing…</div>`;
+      try {
+        const r = await api('/api/ai/career-gap', { method: 'POST', body: { targetRole } });
+        const skills = (r.missing_skills || []).map(s => `<span class="skill-chip">${escapeHTML(s)}</span>`).join('');
+        out.innerHTML = `
+          <div class="ai-coach-analysis">${escapeHTML(r.analysis).replace(/\n/g, '<br>')}</div>
+          ${skills ? `<h4 class="ai-coach-h">Skills to build</h4><div class="skills-list">${skills}</div>` : ''}`;
+      } catch (e) {
+        out.innerHTML = `<div class="ai-error">${escapeHTML(e.message || 'Could not analyze right now.')}</div>`;
+      }
+    };
+    go.onclick = run;
+    roleInput.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
   }
 })();

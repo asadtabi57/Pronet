@@ -586,6 +586,7 @@ const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const mailer = require('./lib/mailer');
+const ai = require('./lib/ai');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -622,6 +623,15 @@ const otpVerifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many code attempts. Please wait a few minutes and try again.' },
+});
+// Protects the AI endpoints (which call an external LLM with free-tier limits)
+// from accidental bursts / abuse. Generous enough for normal interactive use.
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'You are using AI features too quickly. Please wait a moment.' },
 });
 
 // Strong password policy: >=8 chars with upper, lower, number and special.
@@ -995,8 +1005,24 @@ app.put('/api/me', authRequired, wrap(async (req, res) => {
     await q(`UPDATE users SET ${sets.join(', ')} WHERE id = $${i}`, params);
   }
   const fresh = await findUser(u.id);
+  // Refresh the profile's semantic embedding in the background so Smart Match /
+  // Semantic Search stay current. Never blocks the response or fails the save.
+  if (sets.length) updateUserEmbedding(fresh).catch(() => {});
   res.json({ user: await publicUser(fresh, fresh.id) });
 }));
+
+// Regenerate and persist a user's profile embedding. Safe to call fire-and-forget.
+// No-ops cleanly if the vector column doesn't exist (pgvector not enabled).
+async function updateUserEmbedding(u) {
+  if (!u) return;
+  try {
+    const { vector, provider } = await ai.generateEmbedding(ai.profileEmbedText(u));
+    await q(
+      `UPDATE users SET embedding = $1::vector, embedding_provider = $2, embedding_updated_at = $3 WHERE id = $4`,
+      [ai.toVectorLiteral(vector), provider, Date.now(), u.id]
+    );
+  } catch (e) { /* vector column may not exist; ignore */ }
+}
 
 // --- Privacy / account settings (Settings & Privacy menu) ---
 // Update any of the three privacy switches. Online-visibility changes are
@@ -1206,7 +1232,28 @@ app.get('/api/search', authRequired, wrap(async (req, res) => {
     where: 'LOWER(p.content) LIKE $2',
     params: [like], limit: 10
   });
-  res.json({ people, posts });
+  // Semantic people: vector-nearest profiles to the query that the keyword pass
+  // didn't already surface. Works with the local fallback too (lexical overlap).
+  let semantic_people = [];
+  try {
+    if (await vectorSearchReady()) {
+      const emb = await ai.generateEmbedding(qstr);
+      const haveIds = new Set(people.map(p => Number(p.id)));
+      const rows = await nearestUsers({
+        vectorLiteral: ai.toVectorLiteral(emb.vector), provider: emb.provider,
+        excludeIds: [req.user.id, ...haveIds], limit: 6,
+      });
+      const ids = (rows || []).map(r => Number(r.id));
+      const dtoMap = await publicUsersByIds(ids, req.user.id);
+      semantic_people = (rows || [])
+        .filter(r => r.score > 0.25) // drop weak/irrelevant matches
+        .map(r => {
+          const dto = dtoMap.get(Number(r.id)) || {};
+          return { ...dto, id: Number(r.id), match_score: Math.round(Math.max(0, Math.min(1, r.score)) * 100) };
+        });
+    }
+  } catch (e) { /* semantic is a bonus; ignore failures */ }
+  res.json({ people, posts, semantic_people });
 }));
 
 // --- Feed / Posts ---
@@ -1239,6 +1286,8 @@ app.post('/api/posts', authRequired, wrap(async (req, res) => {
   );
   const postId = Number(ins.rows[0].id);
   const post = await fetchOnePostDTO(postId, req.user.id);
+  // Background AI: classify the post for B2B lead/intent signals (no-op without a key).
+  classifyPostIntent(postId, req.user.id, (content || '').trim()).catch(() => {});
   // Notify all accepted connections about the new post
   (async () => {
     try {
@@ -2359,6 +2408,349 @@ app.post('/api/subscriptions/cancel', authRequired, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ===========================================================================
+// AI FEATURES (Gemini free tier; degrades gracefully without a key)
+// ===========================================================================
+function isPremium(u) { return !!(u && u.subscription && !u.subscription.cancelled_at); }
+
+// Whether the users.embedding (pgvector) column exists. Checked once, cached.
+let _vectorReady = null;
+async function vectorSearchReady() {
+  if (_vectorReady != null) return _vectorReady;
+  try {
+    const r = await q(`SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='embedding'`);
+    _vectorReady = r.rowCount > 0;
+  } catch (e) { _vectorReady = false; }
+  return _vectorReady;
+}
+
+// Map an AI helper error to a clean HTTP response.
+function sendAIError(res, e) {
+  const status = e && e.status ? e.status : 500;
+  const msg = e && e.code === 'AI_NOT_CONFIGURED'
+    ? 'AI features are not configured yet. Add a free GEMINI_API_KEY to enable them.'
+    : (e && e.message) || 'AI request failed.';
+  return res.status(status).json({ error: msg, code: e && e.code });
+}
+
+// Cosine-nearest users to a given vector literal (same embedding provider only,
+// since local & gemini vectors aren't comparable). Returns rows with a score.
+async function nearestUsers({ vectorLiteral, provider, excludeIds = [], limit = 10 }) {
+  if (!(await vectorSearchReady())) return null; // signal: no vector path
+  const ex = [...new Set(excludeIds.map(Number).filter(Boolean))];
+  const r = await q(
+    `SELECT id, name, headline, location, avatar_color, avatar_url, cover_color, skills,
+            1 - (embedding <=> $1::vector) AS score
+       FROM users
+      WHERE embedding IS NOT NULL
+        AND embedding_provider = $2
+        AND NOT (id = ANY($3::bigint[]))
+      ORDER BY embedding <=> $1::vector
+      LIMIT $4`,
+    [vectorLiteral, provider, ex.length ? ex : [0], limit]
+  );
+  return r.rows;
+}
+
+// Capability probe for the frontend — lets the UI show/hide AI affordances and
+// explain when AI is off.
+app.get('/api/ai/status', authRequired, wrap(async (req, res) => {
+  res.json({
+    enabled: ai.aiEnabled(),
+    embedding_provider: ai.embeddingProvider(),
+    vector_search: await vectorSearchReady(),
+    features: {
+      enhance: ai.aiEnabled(), draft_post: ai.aiEnabled(), smart_replies: ai.aiEnabled(),
+      draft_intro: ai.aiEnabled(), tone_guardian: ai.aiEnabled(), career_gap: ai.aiEnabled(),
+      mock_interview: ai.aiEnabled(), feed_summary: ai.aiEnabled(), lead_scorer: ai.aiEnabled(),
+      // Smart match & semantic search work even without a key (local fallback).
+      smart_match: true, semantic_search: true,
+    },
+  });
+}));
+
+// --- 2. Profile Enhancer ---
+app.post('/api/ai/enhance-profile', authRequired, aiLimiter, wrap(async (req, res) => {
+  const field = String((req.body && req.body.field) || 'about');
+  const notes = String((req.body && req.body.notes) || '').trim().slice(0, 1500);
+  if (!notes) return res.status(400).json({ error: 'Please add a few notes first.' });
+  const isHeadline = field === 'headline';
+  const system = 'You are an expert LinkedIn profile writer. You write concise, professional, first-person copy. Never use hashtags. Output ONLY the rewritten text with no preamble, quotes, or markdown.';
+  const prompt = isHeadline
+    ? `Turn these rough notes into a single punchy professional headline (max 120 characters, no period at the end):\n\n${notes}`
+    : `Turn these rough notes into a polished professional "About" section of 2-4 sentences for a professional networking profile:\n\n${notes}`;
+  try {
+    let text = await ai.generateText(prompt, { system, maxTokens: isHeadline ? 60 : 300, temperature: 0.7 });
+    text = text.replace(/^["']|["']$/g, '').trim();
+    if (isHeadline) text = text.replace(/\.$/, '').slice(0, 160);
+    res.json({ text });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 3a. Post Writer ---
+app.post('/api/ai/draft-post', authRequired, aiLimiter, wrap(async (req, res) => {
+  const topic = String((req.body && req.body.topic) || '').trim().slice(0, 600);
+  const tone = String((req.body && req.body.tone) || 'professional').slice(0, 30);
+  if (!topic) return res.status(400).json({ error: 'What should the post be about?' });
+  const system = 'You are a skilled professional content writer for a LinkedIn-style network. Write engaging, authentic posts in first person. Output ONLY the post text (no surrounding quotes or commentary). End with 2-3 relevant hashtags on the same or a new line.';
+  const prompt = `Write a ${tone} post (around 3-6 short sentences) about:\n\n${topic}`;
+  try {
+    const text = await ai.generateText(prompt, { system, maxTokens: 400, temperature: 0.8 });
+    res.json({ text: text.trim() });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 3b. Smart Replies (for messages) ---
+app.post('/api/ai/suggest-replies', authRequired, aiLimiter, wrap(async (req, res) => {
+  const context = String((req.body && req.body.context) || '').trim().slice(0, 1200);
+  if (!context) return res.status(400).json({ error: 'No message to reply to.' });
+  const system = 'You generate short professional chat reply suggestions. Replies must be distinct in intent (e.g. one affirmative, one asking a question, one polite deferral), natural, and under 12 words each.';
+  const prompt = `The other person just sent this message:\n"""${context}"""\n\nReturn a JSON object: {"replies": ["...","...","..."]} with exactly 3 short reply options I could send back.`;
+  try {
+    const data = await ai.generateJSON(prompt, { system, maxTokens: 200, temperature: 0.7 });
+    let replies = (data && Array.isArray(data.replies)) ? data.replies : [];
+    replies = replies.map(r => String(r).trim()).filter(Boolean).slice(0, 3);
+    res.json({ replies });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 7. Warm Intro / Icebreaker ---
+app.post('/api/ai/draft-intro', authRequired, aiLimiter, wrap(async (req, res) => {
+  const targetId = Number(req.body && req.body.targetUserId);
+  if (!targetId || targetId === req.user.id) return res.status(400).json({ error: 'Invalid target user.' });
+  const [meRow, targetRow] = await Promise.all([findUser(req.user.id), findUser(targetId)]);
+  if (!targetRow) return res.status(404).json({ error: 'User not found.' });
+  // Mutual connection count for a more personalized note.
+  let mutual = 0;
+  try {
+    const mr = await q(
+      `SELECT COUNT(*)::int AS c FROM
+         (SELECT CASE WHEN user_a=$1 THEN user_b ELSE user_a END AS o FROM connections WHERE (user_a=$1 OR user_b=$1) AND accepted=1) ma
+         JOIN
+         (SELECT CASE WHEN user_a=$2 THEN user_b ELSE user_a END AS o FROM connections WHERE (user_a=$2 OR user_b=$2) AND accepted=1) mb
+         ON ma.o = mb.o`, [req.user.id, targetId]);
+    mutual = mr.rows[0] ? mr.rows[0].c : 0;
+  } catch (e) {}
+  const meSkills = Array.isArray(meRow.skills) ? meRow.skills.join(', ') : '';
+  const tgtSkills = Array.isArray(targetRow.skills) ? targetRow.skills.join(', ') : '';
+  const system = 'You write warm, genuine, NON-spammy connection request notes for a professional network. Keep it to 2 sentences, friendly and specific. Use the sender\'s first name only if natural. Output ONLY the message text — no quotes, no subject line.';
+  const prompt = `Write a connection request from me to them. Find authentic common ground.\n\n` +
+    `ME: ${meRow.name}; headline: ${meRow.headline || 'n/a'}; skills: ${meSkills || 'n/a'}.\n` +
+    `THEM: ${targetRow.name}; headline: ${targetRow.headline || 'n/a'}; skills: ${tgtSkills || 'n/a'}.\n` +
+    `Mutual connections: ${mutual}.`;
+  try {
+    const text = await ai.generateText(prompt, { system, maxTokens: 160, temperature: 0.75 });
+    res.json({ text: text.replace(/^["']|["']$/g, '').trim() });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 10. Tone Guardian (pre-send check) ---
+// Cheap local pre-filter first; only escalate to the LLM when it trips, so we
+// spend zero API calls on the overwhelming majority of clean messages.
+app.post('/api/ai/check-tone', authRequired, aiLimiter, wrap(async (req, res) => {
+  const text = String((req.body && req.body.text) || '').trim().slice(0, 2000);
+  if (!text) return res.json({ flagged: false });
+  if (!ai.localToxicityHit(text)) return res.json({ flagged: false, checked: 'local' });
+  // Local filter flagged it — confirm with the LLM if available, else trust local.
+  if (!ai.aiEnabled()) return res.json({ flagged: true, checked: 'local', reason: 'Potentially harsh language detected.' });
+  try {
+    const data = await ai.generateJSON(
+      `Is the following message aggressive, toxic, harassing, or unprofessional for a professional network? ` +
+      `Reply as JSON {"flagged": true|false, "reason": "short reason"}.\n\nMESSAGE:\n"""${text}"""`,
+      { maxTokens: 80, temperature: 0 });
+    res.json({ flagged: !!(data && data.flagged), reason: (data && data.reason) || 'Potentially unprofessional tone.', checked: 'ai' });
+  } catch (e) {
+    // On AI failure, fall back to the local verdict rather than blocking the user.
+    res.json({ flagged: true, checked: 'local', reason: 'Potentially harsh language detected.' });
+  }
+}));
+
+// --- 1 & 4. Smart Match (vector NN, excludes self + existing connections) ---
+app.get('/api/network/smart-matches', authRequired, wrap(async (req, res) => {
+  const meRow = await findUser(req.user.id);
+  if (!meRow) return res.status(404).json({ error: 'Not found' });
+  if (!(await vectorSearchReady())) return res.json({ matches: [], reason: 'vector_unavailable' });
+
+  // Build (or reuse) my embedding.
+  let vecLit, provider = ai.embeddingProvider();
+  if (meRow.embedding && meRow.embedding_provider === provider) {
+    vecLit = typeof meRow.embedding === 'string' ? meRow.embedding : ai.toVectorLiteral(meRow.embedding);
+  } else {
+    const emb = await ai.generateEmbedding(ai.profileEmbedText(meRow));
+    vecLit = ai.toVectorLiteral(emb.vector); provider = emb.provider;
+    updateUserEmbedding(meRow).catch(() => {});
+  }
+  // Exclude self + everyone I already have any connection row with.
+  const conns = await q(
+    `SELECT CASE WHEN user_a=$1 THEN user_b ELSE user_a END AS o FROM connections WHERE user_a=$1 OR user_b=$1`,
+    [req.user.id]);
+  const exclude = [req.user.id, ...conns.rows.map(r => Number(r.o))];
+  const rows = await nearestUsers({ vectorLiteral: vecLit, provider, excludeIds: exclude, limit: 12 });
+  const ids = (rows || []).map(r => Number(r.id));
+  const dtoMap = await publicUsersByIds(ids, req.user.id);
+  const matches = (rows || []).map(r => {
+    const dto = dtoMap.get(Number(r.id)) || {};
+    return { ...dto, id: Number(r.id), match_score: Math.round(Math.max(0, Math.min(1, r.score)) * 100) };
+  });
+  res.json({ matches, provider });
+}));
+
+// --- 8. Career Path Analyzer (vector neighbors for the role + LLM synthesis) ---
+app.post('/api/ai/career-gap', authRequired, aiLimiter, wrap(async (req, res) => {
+  const targetRole = String((req.body && req.body.targetRole) || '').trim().slice(0, 120);
+  if (!targetRole) return res.status(400).json({ error: 'Enter a target role.' });
+  const meRow = await findUser(req.user.id);
+  const mySkills = Array.isArray(meRow.skills) ? meRow.skills : [];
+
+  // Gather skills from people who resemble the target role (vector search if
+  // available; otherwise a keyword match on headline).
+  let exemplarSkills = [];
+  if (await vectorSearchReady()) {
+    const emb = await ai.generateEmbedding(targetRole);
+    const rows = await nearestUsers({ vectorLiteral: ai.toVectorLiteral(emb.vector), provider: emb.provider, excludeIds: [req.user.id], limit: 8 });
+    for (const r of (rows || [])) if (Array.isArray(r.skills)) exemplarSkills.push(...r.skills);
+  } else {
+    const like = '%' + targetRole.toLowerCase() + '%';
+    const rows = await q(`SELECT skills FROM users WHERE LOWER(COALESCE(headline,'')) LIKE $1 LIMIT 8`, [like]);
+    for (const r of rows.rows) if (Array.isArray(r.skills)) exemplarSkills.push(...r.skills);
+  }
+  // Tally the most common exemplar skills the user is missing.
+  const freq = new Map();
+  const myLower = new Set(mySkills.map(s => String(s).toLowerCase()));
+  for (const s of exemplarSkills) {
+    const key = String(s).trim(); if (!key) continue;
+    if (myLower.has(key.toLowerCase())) continue;
+    freq.set(key, (freq.get(key) || 0) + 1);
+  }
+  const missing = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
+
+  if (!ai.aiEnabled()) {
+    // Useful even without a key: return the data-driven skill gap directly.
+    return res.json({
+      analysis: missing.length
+        ? `To move toward "${targetRole}", consider building these skills that similar professionals have: ${missing.slice(0, 5).join(', ')}.`
+        : `Your profile already aligns well with "${targetRole}". Keep your skills and experience up to date.`,
+      missing_skills: missing, ai: false,
+    });
+  }
+  const system = 'You are a concise, encouraging career coach. Output 3-4 sentences of specific, actionable advice. No preamble.';
+  const prompt = `My current skills: ${mySkills.join(', ') || 'none listed'}.\n` +
+    `Target role: ${targetRole}.\n` +
+    `Skills common among people in that role that I'm missing: ${missing.join(', ') || 'none found'}.\n` +
+    `Write a short gap analysis telling me what to learn next and why.`;
+  try {
+    const analysis = await ai.generateText(prompt, { system, maxTokens: 280, temperature: 0.7 });
+    res.json({ analysis: analysis.trim(), missing_skills: missing, ai: true });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 6. Mock Interview Lounge ---
+app.post('/api/ai/interview/turn', authRequired, aiLimiter, wrap(async (req, res) => {
+  const role = String((req.body && req.body.role) || '').trim().slice(0, 160);
+  const jobDesc = String((req.body && req.body.jobDescription) || '').trim().slice(0, 1500);
+  const history = Array.isArray(req.body && req.body.history) ? req.body.history.slice(-12) : [];
+  if (!role && !jobDesc) return res.status(400).json({ error: 'Provide a role or job description.' });
+  const transcript = history.map(h => `${h.role === 'candidate' ? 'Candidate' : 'Interviewer'}: ${String(h.text || '').slice(0, 600)}`).join('\n');
+  const system = 'You are a friendly but rigorous hiring manager conducting a mock interview. Ask ONE concise question at a time (1-2 sentences). Mix behavioral and role-specific technical questions. Build naturally on the candidate\'s previous answers. Output ONLY your next question — no commentary, no numbering.';
+  const prompt = `Role: ${role || 'see job description'}\n${jobDesc ? `Job description: ${jobDesc}\n` : ''}` +
+    `Transcript so far:\n${transcript || '(none yet — ask your first question)'}\n\nAsk the next interview question.`;
+  try {
+    const question = await ai.generateText(prompt, { system, maxTokens: 120, temperature: 0.8 });
+    res.json({ question: question.trim() });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+app.post('/api/ai/interview/score', authRequired, aiLimiter, wrap(async (req, res) => {
+  const role = String((req.body && req.body.role) || '').trim().slice(0, 160);
+  const history = Array.isArray(req.body && req.body.history) ? req.body.history.slice(-30) : [];
+  if (!history.length) return res.status(400).json({ error: 'No interview to score yet.' });
+  const transcript = history.map(h => `${h.role === 'candidate' ? 'Candidate' : 'Interviewer'}: ${String(h.text || '').slice(0, 800)}`).join('\n');
+  const system = 'You are an interview coach. Evaluate the candidate fairly and constructively.';
+  const prompt = `Evaluate this mock interview for the role "${role || 'the target role'}".\n\n${transcript}\n\n` +
+    `Return JSON: {"overall": <0-100 integer>, "strengths": ["..."], "improvements": ["..."], "summary": "2-sentence summary"}.`;
+  try {
+    const data = await ai.generateJSON(prompt, { system, maxTokens: 500, temperature: 0.5 });
+    if (!data) return res.status(502).json({ error: 'Could not generate a scorecard. Try again.' });
+    res.json({
+      overall: Math.max(0, Math.min(100, Number(data.overall) || 0)),
+      strengths: Array.isArray(data.strengths) ? data.strengths.slice(0, 5) : [],
+      improvements: Array.isArray(data.improvements) ? data.improvements.slice(0, 5) : [],
+      summary: String(data.summary || '').slice(0, 600),
+    });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 5. Network TL;DR (on-demand, cached, regenerated when stale) ---
+const FEED_SUMMARY_TTL = 6 * 60 * 60 * 1000; // 6h
+app.get('/api/ai/feed-summary', authRequired, wrap(async (req, res) => {
+  if (!ai.aiEnabled()) return res.json({ summary: null, enabled: false });
+  try {
+    const cached = await q(`SELECT summary, post_count, created_at FROM feed_summaries WHERE user_id = $1`, [req.user.id]);
+    if (cached.rowCount && (Date.now() - Number(cached.rows[0].created_at) < FEED_SUMMARY_TTL)) {
+      return res.json({ summary: cached.rows[0].summary, post_count: cached.rows[0].post_count, cached: true });
+    }
+  } catch (e) {}
+  // Pull the viewer's recent network posts.
+  let posts = [];
+  try {
+    posts = await fetchPostDTOs({ viewerId: req.user.id, where: VISIBLE_AUTHOR_WHERE, limit: 12 });
+  } catch (e) {}
+  const recent = posts.filter(p => Date.now() - p.created_at < 3 * 24 * 60 * 60 * 1000).slice(0, 10);
+  if (recent.length < 2) return res.json({ summary: null, post_count: recent.length, reason: 'not_enough' });
+  const lines = recent.map(p => `- ${p.name}: ${String(p.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
+  const system = 'You summarize a professional network feed into a crisp digest. Output 3 bullet points, each starting with "• ", each under 20 words. No preamble.';
+  try {
+    const summary = await ai.generateText(`Summarize what's happening in my network:\n\n${lines}`, { system, maxTokens: 200, temperature: 0.6 });
+    await q(
+      `INSERT INTO feed_summaries (user_id, summary, post_count, seen, created_at)
+       VALUES ($1,$2,$3,0,$4)
+       ON CONFLICT (user_id) DO UPDATE SET summary=EXCLUDED.summary, post_count=EXCLUDED.post_count, seen=0, created_at=EXCLUDED.created_at`,
+      [req.user.id, summary.trim(), recent.length, Date.now()]
+    ).catch(() => {});
+    res.json({ summary: summary.trim(), post_count: recent.length, cached: false });
+  } catch (e) { sendAIError(res, e); }
+}));
+
+// --- 9. B2B Lead Scorer (premium dashboard + background classifier) ---
+// Classify a freshly created post for buying/hiring/transition intent. Called
+// fire-and-forget from the post-create route (function is hoisted).
+async function classifyPostIntent(postId, authorId, content) {
+  if (!ai.aiEnabled()) return;
+  const text = String(content || '').trim();
+  if (text.length < 12) return;
+  try {
+    const data = await ai.generateJSON(
+      `Analyze this professional-network post. Does it signal that the author is (a) job searching, (b) needing/evaluating a software tool or service, or (c) going through a career transition?\n` +
+      `Reply JSON {"signal": true|false, "type": "job_search"|"tool_need"|"career_transition"|"none", "confidence": "high"|"medium"|"low"}.\n\nPOST:\n"""${text.slice(0, 1000)}"""`,
+      { maxTokens: 80, temperature: 0 });
+    if (!data || !data.signal || !data.type || data.type === 'none') return;
+    await q(
+      `INSERT INTO lead_signals (post_id, author_id, signal_type, confidence, snippet, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (post_id) DO NOTHING`,
+      [postId, authorId, String(data.type), String(data.confidence || 'low'), text.slice(0, 240), Date.now()]
+    );
+  } catch (e) { /* best-effort */ }
+}
+
+app.get('/api/ai/leads', authRequired, wrap(async (req, res) => {
+  const meRow = await findUser(req.user.id);
+  if (!isPremium(meRow)) return res.status(403).json({ error: 'Lead signals are a Premium feature.', upgrade: true });
+  const type = String(req.query.type || '').trim();
+  const params = [];
+  let where = '1=1';
+  if (['job_search', 'tool_need', 'career_transition'].includes(type)) { params.push(type); where += ` AND ls.signal_type = $${params.length}`; }
+  const r = await q(
+    `SELECT ls.id, ls.post_id, ls.author_id, ls.signal_type, ls.confidence, ls.snippet, ls.created_at
+       FROM lead_signals ls WHERE ${where} ORDER BY ls.created_at DESC LIMIT 50`, params);
+  const userMap = await publicUsersByIds(r.rows.map(x => x.author_id), req.user.id);
+  const leads = r.rows.map(x => ({
+    id: Number(x.id), post_id: Number(x.post_id),
+    signal_type: x.signal_type, confidence: x.confidence, snippet: x.snippet,
+    created_at: Number(x.created_at), author: userMap.get(Number(x.author_id)) || null,
+  }));
+  res.json({ leads, enabled: ai.aiEnabled() });
+}));
+
 // Error handler
 app.use((err, req, res, next) => {
   console.error('API error:', err);
@@ -2395,4 +2787,11 @@ app.get('*', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'
   }
   cleanupCalls();
   setInterval(cleanupCalls, 6 * 60 * 60 * 1000); // every 6 hours
+
+  // AI capability log + optional background digest precompute.
+  if (ai.aiEnabled()) {
+    console.log('🤖 AI features ENABLED (Gemini). embedding provider:', ai.embeddingProvider());
+  } else {
+    console.log('🤖 AI: no GEMINI_API_KEY — generative features return 503; Smart Match/Search use local embeddings.');
+  }
 })();

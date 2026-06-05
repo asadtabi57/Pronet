@@ -439,6 +439,7 @@
         </a>
       </div>
       <div class="msg-conv-body" id="conv-body"></div>
+      <div class="smart-replies" id="smart-replies" hidden></div>
       <div class="msg-reply-bar" id="reply-bar" hidden></div>
       <div class="msg-attach-preview" id="attach-preview" hidden></div>
       <form class="msg-form">
@@ -480,6 +481,51 @@
     const backBtn = document.getElementById('back');
     if (backBtn) backBtn.onclick = () => { shell.classList.remove('show-conv'); active = null; };
     loadThreads();
+
+    // Warm-intro draft handoff from a profile page: prefill the composer once.
+    try {
+      const draftRaw = sessionStorage.getItem('pronet_msg_draft');
+      if (draftRaw) {
+        const draft = JSON.parse(draftRaw);
+        if (draft && Number(draft.userId) === Number(userId) && draft.text) {
+          const ta = convEl.querySelector('.msg-form textarea');
+          if (ta) { ta.value = draft.text; ta.focus(); }
+        }
+        sessionStorage.removeItem('pronet_msg_draft');
+      }
+    } catch (e) {}
+
+    // Smart Replies: suggest quick responses to the latest INCOMING message.
+    maybeSuggestReplies(messages);
+  }
+
+  // Render AI smart-reply pills above the composer, based on the last message
+  // the peer sent (only if AI is enabled and the last message isn't ours).
+  let smartRepliesToken = 0;
+  async function maybeSuggestReplies(messages) {
+    const strip = document.getElementById('smart-replies');
+    if (!strip || !window.AI) return;
+    if (!(await AI.feature('smart_replies'))) return;
+    const last = messages && messages.length ? messages[messages.length - 1] : null;
+    if (!last || last.from_id === me.id) { strip.hidden = true; strip.innerHTML = ''; return; }
+    const context = (last.content || '').trim();
+    if (!context) { strip.hidden = true; return; }
+    const token = ++smartRepliesToken;
+    try {
+      const { replies } = await api('/api/ai/suggest-replies', { method: 'POST', body: { context } });
+      if (token !== smartRepliesToken) return; // a newer conversation/message superseded us
+      if (!replies || !replies.length) { strip.hidden = true; return; }
+      strip.innerHTML = `<span class="sr-label">${AI.SPARKLE}</span>` +
+        replies.map(r => `<button type="button" class="sr-pill">${escapeHTML(r)}</button>`).join('');
+      strip.hidden = false;
+      strip.querySelectorAll('.sr-pill').forEach(b => {
+        b.onclick = () => {
+          const ta = convEl.querySelector('.msg-form textarea');
+          if (ta) { ta.value = b.textContent; ta.focus(); }
+          strip.hidden = true;
+        };
+      });
+    } catch (e) { strip.hidden = true; }
   }
 
   // Drag-and-drop wiring shared across conversations (convEl is reused).
@@ -588,6 +634,8 @@
       const file = pendingFile;
       if (!text && !file) return;
       if (file && file.size > MAX_ATTACH) { toast('File too large — the limit is 5 MB.'); return; }
+      // Tone Guardian on outgoing text (no-op if AI unavailable).
+      if (text && window.AI && !(await AI.tonePrecheck(text))) return;
 
       // Capture (and clear) the reply target up front so the composer resets
       // immediately even though the send completes asynchronously.
@@ -614,6 +662,8 @@
       ta.value = '';
       clearPending();
       clearReplyTarget();
+      const sr = document.getElementById('smart-replies');
+      if (sr) { sr.hidden = true; sr.innerHTML = ''; }
       ta.focus();
 
       try {
@@ -672,7 +722,11 @@
       appendLiveMessage(m);
       // Mark the peer's messages read via a tiny endpoint instead of re-pulling
       // the whole conversation (which re-downloaded every message + attachment).
-      if (m.to_id === me.id) api(`/api/messages/${active}/read`, { method: 'POST' }).catch(() => {});
+      if (m.to_id === me.id) {
+        api(`/api/messages/${active}/read`, { method: 'POST' }).catch(() => {});
+        // Refresh smart replies for the newly arrived incoming message.
+        maybeSuggestReplies([m]);
+      }
     }
     loadThreads();
   });
