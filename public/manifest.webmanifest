@@ -9,7 +9,7 @@
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait",
   "theme_color": "#4f46e5",
-  "background_color": "#f5f6fc",
+  "background_color": "#0e1218",
   "categories": ["business", "social", "productivity"],
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },

@@ -3133,22 +3133,22 @@ body.app {
 .splash-overlay {
   position: fixed; inset: 0; z-index: 100000;
   display: flex; align-items: center; justify-content: center;
-  background: var(--bg-app);
-  transition: opacity .5s ease;
+  background: #0e1218;  /* fixed dark, theme-independent — matches manifest splash */
+  transition: opacity .55s ease;
 }
 .splash-overlay.hide { opacity: 0; pointer-events: none; }
 html[data-splash="done"] .splash-overlay { display: none !important; }
 .splash-content { display: flex; flex-direction: column; align-items: center; }
 .splash-logo-svg {
-  width: 132px; height: 132px;
+  width: 138px; height: 138px;
   animation: introFade 1.5s ease-out forwards;
 }
 .splash-title {
   margin: 22px 0 4px; font-size: 30px; font-weight: 800; letter-spacing: -.02em;
-  color: var(--ink); opacity: 0; animation: introFade 1.2s ease-out .4s forwards;
+  color: #f1f5f9; opacity: 0; animation: introFade 1.2s ease-out .4s forwards;
 }
 .splash-subtitle {
-  margin: 0; font-size: 15px; color: var(--muted);
+  margin: 0; font-size: 15px; color: #94a3b8;
   opacity: 0; animation: introFade 1.2s ease-out .7s forwards;
 }
 

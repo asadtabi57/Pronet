@@ -599,7 +599,8 @@ const PWA_HEAD = `\n  <script>(function(){try{var t=localStorage.getItem('pn_the
 // Animated startup splash (Infinite Link logo). Injected at the top of <body>;
 // shown once per session (the early head script sets data-splash="done" so it
 // never flashes on internal navigations), then removed by a small control script.
-const SPLASH_HTML = `\n  <div id="connectik-splash" class="splash-overlay" aria-hidden="true"><div class="splash-content">` +
+const SPLASH_HTML = `\n  <div id="connectik-splash" class="splash-overlay" aria-hidden="true" style="position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:#0e1218">` +
+  `<div class="splash-content" style="display:flex;flex-direction:column;align-items:center">` +
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="splash-logo-svg"><defs>` +
   `<linearGradient id="mintGlow" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient>` +
   `<filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.25"/></filter></defs>` +
@@ -610,7 +611,7 @@ const SPLASH_HTML = `\n  <div id="connectik-splash" class="splash-overlay" aria-
   `<circle class="center-hub" cx="256" cy="256" r="14" fill="#ffffff"/>` +
   `</g></svg>` +
   `<h1 class="splash-title">Connectik</h1><p class="splash-subtitle">Connect &amp; Explore</p></div></div>\n`;
-const SPLASH_SCRIPT = `\n  <script>(function(){var s=document.getElementById('connectik-splash');if(!s)return;if(document.documentElement.getAttribute('data-splash')==='done'){s.remove();return;}try{sessionStorage.setItem('connectik_splash','1');}catch(e){}setTimeout(function(){s.classList.add('hide');setTimeout(function(){if(s&&s.parentNode)s.remove();},520);},2600);})();</script>\n`;
+const SPLASH_SCRIPT = `\n  <script>(function(){var s=document.getElementById('connectik-splash');if(!s)return;if(document.documentElement.getAttribute('data-splash')==='done'){s.remove();return;}try{sessionStorage.setItem('connectik_splash','1');}catch(e){}setTimeout(function(){s.classList.add('hide');setTimeout(function(){if(s&&s.parentNode)s.remove();},560);},3200);})();</script>\n`;
 const PWA_BODY = `\n  <script src="/js/pwa.js"></script>\n  <script src="/js/push.js"></script>\n  <script src="/js/mobile.js"></script>\n`;
 function serveVersionedHtml(req, res, next, fileName) {
   const filePath = path.join(__dirname, 'public', fileName || req.path);
