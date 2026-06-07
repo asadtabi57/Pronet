@@ -2124,6 +2124,8 @@ app.post('/api/calls', authRequired, wrap(async (req, res) => {
     url: `/messages.html?user=${req.user.id}`,
     tag: 'call:' + req.user.id,
     requireInteraction: true,
+    type: 'call',
+    callId: Number(ins.rows[0].id),
   }).catch(() => {});
   res.json({ call: await callDTO(ins.rows[0], req.user.id) });
 }));

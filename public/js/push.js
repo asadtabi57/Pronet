@@ -92,9 +92,60 @@
   function autoResume() {
     if (!supported()) return;
     if (Notification.permission === 'granted') subscribe().catch(() => {});
+    maybeOnboard();
   }
+
+  // ---- First-login onboarding: stay signed in + enable notifications ----
+  function onboarded() { try { return localStorage.getItem('pn_onboarded') === '1'; } catch (e) { return false; } }
+  function setOnboarded() { try { localStorage.setItem('pn_onboarded', '1'); } catch (e) {} }
+  function isAuthed() { try { return window.Session && Session.isAuthed(); } catch (e) { return false; } }
+  function appMode() {
+    try { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
+    catch (e) { return false; }
+  }
+  function maybeOnboard() {
+    if (!supported() || !isAuthed() || onboarded()) return;
+    // Only on authenticated app pages (avoid landing/auth screens).
+    if (!document.getElementById('top-nav')) return;
+    // If the user already decided on notifications, don't nag.
+    if (Notification.permission !== 'default') { setOnboarded(); return; }
+    setTimeout(showOnboard, 1200);
+  }
+  function showOnboard() {
+    if (document.querySelector('.pn-onboard-back')) return;
+    const me = (window.getMe && getMe()) || {};
+    const name = (me.name || '').split(' ')[0] || 'there';
+    const stayLine = appMode()
+      ? `<li><span class="pn-ob-ic">🔒</span> You'll <b>stay signed in</b> on this device — no need to log in again.</li>`
+      : '';
+    const back = document.createElement('div');
+    back.className = 'pn-onboard-back';
+    back.innerHTML = `
+      <div class="pn-onboard">
+        <div class="pn-ob-logo">P</div>
+        <h3>You're all set, ${escapeHtml(name)}! 🎉</h3>
+        <ul class="pn-ob-list">
+          ${stayLine}
+          <li><span class="pn-ob-ic">🔔</span> Turn on <b>notifications</b> so you never miss a message or call — even when the app is closed.</li>
+        </ul>
+        <button class="pn-ob-primary" id="pn-ob-enable">Turn on notifications</button>
+        <button class="pn-ob-later" id="pn-ob-later">Maybe later</button>
+      </div>`;
+    document.body.appendChild(back);
+    requestAnimationFrame(() => back.classList.add('show'));
+    const close = () => { back.classList.remove('show'); setTimeout(() => back.remove(), 220); };
+    back.querySelector('#pn-ob-enable').onclick = async () => {
+      const btn = back.querySelector('#pn-ob-enable');
+      btn.disabled = true; btn.textContent = 'Enabling…';
+      await enable();
+      setOnboarded(); close();
+    };
+    back.querySelector('#pn-ob-later').onclick = () => { setOnboarded(); close(); };
+  }
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', autoResume);
   else autoResume();
 
-  window.PronetPush = { supported, enable, subscribe, reflectButton };
+  window.PronetPush = { supported, enable, subscribe, reflectButton, showOnboard };
 })();

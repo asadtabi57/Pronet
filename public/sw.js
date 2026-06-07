@@ -4,7 +4,7 @@
 //   • navigations    -> network-first, fall back to cached page, then offline.html
 //   • static assets  -> stale-while-revalidate (instant load, refresh in bg)
 //   • cross-origin   -> passthrough (CDNs, Gemini, Supabase handle themselves)
-const VERSION = 'pronet-v2';
+const VERSION = 'pronet-v3';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 
@@ -82,6 +82,7 @@ self.addEventListener('message', (event) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data && event.data.text() }; }
+  const isCall = data.type === 'call';
   const title = data.title || 'Pronet';
   const options = {
     body: data.body || '',
@@ -89,19 +90,37 @@ self.addEventListener('push', (event) => {
     badge: data.badge || '/icons/icon-192.png',
     tag: data.tag || 'pronet',
     renotify: true,
-    requireInteraction: !!data.requireInteraction,
-    data: { url: data.url || '/notifications.html' },
-    vibrate: [80, 40, 80],
+    requireInteraction: isCall ? true : !!data.requireInteraction,
+    data: { url: data.url || '/notifications.html', type: data.type, callId: data.callId },
+    // A long, repeating buzz for calls so the phone "rings"; a short tap otherwise.
+    vibrate: isCall ? [400, 200, 400, 200, 400, 200, 400] : [80, 40, 80],
   };
+  // Answer / Decline buttons on incoming-call notifications.
+  if (isCall) {
+    options.actions = [
+      { action: 'answer', title: '✅ Answer' },
+      { action: 'decline', title: '❌ Decline' },
+    ];
+  }
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
+  const d = event.notification.data || {};
+  const url = d.url || '/notifications.html';
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/notifications.html';
+
+  // Decline an incoming call straight from the notification.
+  if (event.action === 'decline' && d.callId) {
+    event.waitUntil(
+      fetch('/api/calls/' + d.callId + '/reject', { method: 'POST', credentials: 'include' }).catch(() => {})
+    );
+    return;
+  }
+
+  // Answer / tap → focus an existing window or open the call/target URL.
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // Focus an existing tab if one is open, else open a new one.
       for (const client of clients) {
         if ('focus' in client) {
           client.focus();

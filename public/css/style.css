@@ -2992,3 +2992,24 @@ body.app {
 .notif-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .notif-toolbar { display: flex; gap: 8px; align-items: center; }
 .notif-toolbar .btn-tiny[disabled] { opacity: .45; cursor: default; }
+
+/* First-login onboarding (stay signed in + enable notifications) */
+.pn-onboard-back {
+  position: fixed; inset: 0; z-index: 9500; display: flex; align-items: center; justify-content: center;
+  background: rgba(15,23,42,.5); backdrop-filter: blur(3px); opacity: 0; transition: opacity .22s ease; padding: 20px;
+}
+.pn-onboard-back.show { opacity: 1; }
+.pn-onboard {
+  width: 100%; max-width: 360px; background: var(--card); border-radius: 20px; padding: 26px 22px 20px;
+  text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.3); transform: translateY(12px) scale(.98);
+  transition: transform .24s cubic-bezier(.22,.7,.3,1);
+}
+.pn-onboard-back.show .pn-onboard { transform: none; }
+.pn-ob-logo { width: 56px; height: 56px; border-radius: 16px; margin: 0 auto 14px; background: linear-gradient(135deg,#4f46e5,#3f37c9); color: #fff; font-weight: 800; font-size: 28px; display: flex; align-items: center; justify-content: center; }
+.pn-onboard h3 { margin: 0 0 14px; font-size: 19px; }
+.pn-ob-list { list-style: none; margin: 0 0 18px; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 12px; }
+.pn-ob-list li { display: flex; gap: 10px; font-size: 14px; color: var(--ink-2); line-height: 1.45; }
+.pn-ob-ic { flex-shrink: 0; font-size: 18px; }
+.pn-ob-primary { width: 100%; background: var(--brand); color: #fff; border: 0; border-radius: 999px; padding: 13px; font-size: 15px; font-weight: 700; cursor: pointer; }
+.pn-ob-primary:disabled { opacity: .6; }
+.pn-ob-later { width: 100%; background: transparent; border: 0; color: var(--muted); padding: 12px; font-size: 14px; cursor: pointer; margin-top: 4px; }
