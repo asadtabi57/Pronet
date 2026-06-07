@@ -9,7 +9,7 @@
         <div class="pc-body">
           <a href="/profile.html?id=${p.id}" class="pc-avatar">${avatar(p, 'md')}</a>
           <div class="pc-name"><a href="/profile.html?id=${p.id}">${escapeHTML(p.name)}</a></div>
-          <div class="pc-headline">${escapeHTML(p.headline || 'Member on Pronet')}</div>
+          <div class="pc-headline">${escapeHTML(p.headline || 'Member on Connectik')}</div>
           ${p.location ? `<div class="pc-loc">📍 ${escapeHTML(p.location)}</div>` : ''}
           <div class="pc-actions">${actionsHtml}</div>
         </div>

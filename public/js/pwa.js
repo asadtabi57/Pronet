@@ -32,7 +32,7 @@
   function showUpdateToast(reg) {
     const bar = document.createElement('div');
     bar.className = 'pwa-update-bar';
-    bar.innerHTML = `<span>A new version of Pronet is available.</span><button>Update</button>`;
+    bar.innerHTML = `<span>A new version of Connectik is available.</span><button>Update</button>`;
     document.body.appendChild(bar);
     requestAnimationFrame(() => bar.classList.add('show'));
     bar.querySelector('button').onclick = () => {
@@ -53,7 +53,7 @@
   window.addEventListener('appinstalled', () => {
     deferredPrompt = null;
     window.__canInstallPWA = false;
-    try { if (window.toast) toast('Pronet installed 🎉'); } catch (e) {}
+    try { if (window.toast) toast('Connectik installed 🎉'); } catch (e) {}
   });
 
   // Exposed so the mobile shell (or a settings menu) can trigger install.
@@ -61,7 +61,7 @@
     if (!deferredPrompt) {
       // iOS / unsupported: guide the user.
       const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-      if (isIOS) alert('To install Pronet: tap the Share button, then "Add to Home Screen".');
+      if (isIOS) alert('To install Connectik: tap the Share button, then "Add to Home Screen".');
       else if (window.toast) toast('Install isn\'t available right now. Open the browser menu → Install app.');
       return;
     }

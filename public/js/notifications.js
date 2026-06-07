@@ -106,9 +106,9 @@
     };
     // Wire the "enable push" button if the push helper is present.
     const enableBtn = document.getElementById('notif-enable-btn');
-    if (enableBtn && window.PronetPush) {
-      window.PronetPush.reflectButton(enableBtn);
-      enableBtn.onclick = () => window.PronetPush.enable(enableBtn);
+    if (enableBtn && window.ConnectikPush) {
+      window.ConnectikPush.reflectButton(enableBtn);
+      enableBtn.onclick = () => window.ConnectikPush.enable(enableBtn);
     }
   }
 

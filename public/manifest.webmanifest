@@ -1,7 +1,7 @@
 {
-  "name": "Pronet — Connect, Collaborate, Grow",
-  "short_name": "Pronet",
-  "description": "Pronet is a professional networking app: feed, messaging, smart connections, and AI career tools.",
+  "name": "Connectik — Connect, Collaborate, Grow",
+  "short_name": "Connectik",
+  "description": "Connectik is a professional networking app: feed, messaging, smart connections, and AI career tools.",
   "id": "/?source=pwa",
   "start_url": "/feed.html?source=pwa",
   "scope": "/",

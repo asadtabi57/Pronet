@@ -595,7 +595,22 @@ const htmlCache = new Map();
 // icons, and the SW-registration + mobile-app-shell scripts. The mobile shell
 // self-disables on pages without #top-nav (landing/auth), so this is safe to
 // add globally.
-const PWA_HEAD = `\n  <script>(function(){try{var t=localStorage.getItem('pn_theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>\n  <link rel="manifest" href="/manifest.webmanifest" />\n  <meta name="theme-color" content="#4f46e5" />\n  <meta name="mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="default" />\n  <meta name="apple-mobile-web-app-title" content="Pronet" />\n  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />\n  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />\n`;
+const PWA_HEAD = `\n  <script>(function(){try{var t=localStorage.getItem('pn_theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);if(sessionStorage.getItem('connectik_splash')==='1'){document.documentElement.setAttribute('data-splash','done');}}catch(e){}})();</script>\n  <link rel="manifest" href="/manifest.webmanifest" />\n  <meta name="theme-color" content="#4f46e5" />\n  <meta name="mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="default" />\n  <meta name="apple-mobile-web-app-title" content="Connectik" />\n  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />\n  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />\n`;
+// Animated startup splash (Infinite Link logo). Injected at the top of <body>;
+// shown once per session (the early head script sets data-splash="done" so it
+// never flashes on internal navigations), then removed by a small control script.
+const SPLASH_HTML = `\n  <div id="connectik-splash" class="splash-overlay" aria-hidden="true"><div class="splash-content">` +
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="splash-logo-svg"><defs>` +
+  `<linearGradient id="mintGlow" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient>` +
+  `<filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.25"/></filter></defs>` +
+  `<rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/>` +
+  `<g filter="url(#dropShadow)">` +
+  `<rect class="link-left" x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/>` +
+  `<rect class="link-right" x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#mintGlow)" stroke-width="32" opacity="0.95"/>` +
+  `<circle class="center-hub" cx="256" cy="256" r="14" fill="#ffffff"/>` +
+  `</g></svg>` +
+  `<h1 class="splash-title">Connectik</h1><p class="splash-subtitle">Connect &amp; Explore</p></div></div>\n`;
+const SPLASH_SCRIPT = `\n  <script>(function(){var s=document.getElementById('connectik-splash');if(!s)return;if(document.documentElement.getAttribute('data-splash')==='done'){s.remove();return;}try{sessionStorage.setItem('connectik_splash','1');}catch(e){}setTimeout(function(){s.classList.add('hide');setTimeout(function(){if(s&&s.parentNode)s.remove();},520);},2600);})();</script>\n`;
 const PWA_BODY = `\n  <script src="/js/pwa.js"></script>\n  <script src="/js/push.js"></script>\n  <script src="/js/mobile.js"></script>\n`;
 function serveVersionedHtml(req, res, next, fileName) {
   const filePath = path.join(__dirname, 'public', fileName || req.path);
@@ -610,7 +625,11 @@ function serveVersionedHtml(req, res, next, fileName) {
       html = html.replace('</head>', PWA_HEAD + '</head>');
     }
     if (html.indexOf('/js/mobile.js') === -1 && html.indexOf('</body>') !== -1) {
-      html = html.replace('</body>', PWA_BODY + '</body>');
+      html = html.replace('</body>', PWA_BODY + SPLASH_SCRIPT + '</body>');
+    }
+    // Splash overlay at the very top of <body> (shown once per session).
+    if (html.indexOf('splash-overlay') === -1) {
+      html = html.replace(/(<body[^>]*>)/i, `$1${SPLASH_HTML}`);
     }
     html = html.replace(/(src|href)="(\/[^"]+\.(?:css|js))"/g, `$1="$2?v=${BUILD_ID}"`);
     htmlCache.set(cacheKey, html);
@@ -2119,7 +2138,7 @@ app.post('/api/calls', authRequired, wrap(async (req, res) => {
   sseSend(receiverId, 'call_invite', { call: dto });
   // OS push for the incoming call (rings the phone even if the app is closed).
   push.sendToUser(receiverId, {
-    title: req.user.name || 'Pronet',
+    title: req.user.name || 'Connectik',
     body: callType === 'video' ? '📹 Incoming video call' : '📞 Incoming call',
     url: `/messages.html?user=${req.user.id}`,
     tag: 'call:' + req.user.id,
@@ -3248,7 +3267,7 @@ app.get('*', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'
     process.exit(1);
   }
   app.listen(PORT, () => {
-    console.log(`🚀 Pronet server (Postgres) running at http://localhost:${PORT}`);
+    console.log(`🚀 Connectik server (Postgres) running at http://localhost:${PORT}`);
   });
 
   // Retention cleanup: drop stale call signals (>1 day) and old call logs (>30 days).

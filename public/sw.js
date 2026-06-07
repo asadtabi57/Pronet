@@ -1,4 +1,4 @@
-// Pronet service worker — app-shell + smart runtime caching.
+// Connectik service worker — app-shell + smart runtime caching.
 // Strategy:
 //   • /api/ and SSE  -> never handled here (always live network; auth + realtime)
 //   • navigations    -> network-first, fall back to cached page, then offline.html
@@ -83,7 +83,7 @@ self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data && event.data.text() }; }
   const isCall = data.type === 'call';
-  const title = data.title || 'Pronet';
+  const title = data.title || 'Connectik';
   const options = {
     body: data.body || '',
     icon: data.icon || '/icons/icon-192.png',

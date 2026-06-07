@@ -122,7 +122,7 @@
     back.className = 'pn-onboard-back';
     back.innerHTML = `
       <div class="pn-onboard">
-        <div class="pn-ob-logo">P</div>
+        <div class="pn-ob-logo"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="obMintGlow" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs><rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/><rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/><rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#obMintGlow)" stroke-width="32"/><circle cx="256" cy="256" r="14" fill="#ffffff"/></svg></div>
         <h3>You're all set, ${escapeHtml(name)}! 🎉</h3>
         <ul class="pn-ob-list">
           ${stayLine}
@@ -147,5 +147,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', autoResume);
   else autoResume();
 
-  window.PronetPush = { supported, enable, subscribe, reflectButton, showOnboard };
+  window.ConnectikPush = { supported, enable, subscribe, reflectButton, showOnboard };
 })();

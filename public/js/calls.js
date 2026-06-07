@@ -1,5 +1,5 @@
 // ==========================================================================
-// Pronet — 1-to-1 WebRTC calls (audio / video / screen share)
+// Connectik — 1-to-1 WebRTC calls (audio / video / screen share)
 // Peer-to-peer media via RTCPeerConnection; signaling over our SSE bus +
 // POST /api/calls/:id/signal. Loaded on every authenticated page so the
 // incoming-call modal can appear no matter where the user is.

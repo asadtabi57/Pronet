@@ -1,4 +1,4 @@
-// public/js/ai.js — shared client for Pronet's AI features.
+// public/js/ai.js — shared client for Connectik's AI features.
 // Depends on app.js globals: api(), toast(), escapeHTML(), confirmDialog().
 // Exposes window.AI with capability detection + small reusable UI helpers.
 (function () {
@@ -101,7 +101,7 @@
       if (!r || !r.flagged) return true;
       return await confirmDialog({
         title: 'Keep it professional?',
-        message: (r.reason ? r.reason + ' ' : '') + 'Pronet is a professional space. Post anyway?',
+        message: (r.reason ? r.reason + ' ' : '') + 'Connectik is a professional space. Post anyway?',
         confirmText: 'Post anyway', cancelText: 'Let me edit',
       });
     } catch (e) { return true; }

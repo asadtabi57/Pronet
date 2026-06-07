@@ -1,4 +1,4 @@
-// Pronet mobile app shell — gives the site a native-app feel on phones &
+// Connectik mobile app shell — gives the site a native-app feel on phones &
 // installed PWA: a slim top app-bar, a bottom tab bar with a center compose
 // button, a "Me" sheet, and a search overlay. Pure progressive enhancement —
 // everything is hidden by CSS media query on desktop, so this never affects the
@@ -19,7 +19,7 @@
       '/notifications.html': 'Notifications', '/profile.html': 'Profile',
       '/lounge.html': 'Lounge', '/premium.html': 'Premium', '/search.html': 'Search',
     };
-    const pageTitle = titleMap[path] || 'Pronet';
+    const pageTitle = titleMap[path] || 'Connectik';
     const active =
       path.startsWith('/feed') ? 'home' :
       path.startsWith('/network') ? 'network' :
@@ -38,7 +38,7 @@
     bar.className = 'm-topbar';
     bar.innerHTML = `
       <div class="m-topbar-inner">
-        <a class="m-brand" href="/feed.html" aria-label="Home">P</a>
+        <a class="m-brand" href="/feed.html" aria-label="Home"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="mNavMintGlow" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs><rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/><rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/><rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#mNavMintGlow)" stroke-width="32"/><circle cx="256" cy="256" r="14" fill="#ffffff"/></svg></a>
         <h1 class="m-title">${escapeHTML(title)}</h1>
         <button class="m-icon-btn" id="m-search-btn" aria-label="Search">${ICONS.search}</button>
         <a class="m-icon-btn" id="m-bell" href="/notifications.html" aria-label="Notifications">
@@ -124,7 +124,7 @@
     const me = (typeof getMe === 'function' && getMe()) || {};
     const installItem = (window.__canInstallPWA && !window.isStandalonePWA?.())
       ? `<button class="m-menu-item" id="mm-install">${ICONS.download}<span>Install app</span></button>` : '';
-    const notifItem = (window.PronetPush && PronetPush.supported() && Notification.permission !== 'granted')
+    const notifItem = (window.ConnectikPush && ConnectikPush.supported() && Notification.permission !== 'granted')
       ? `<button class="m-menu-item" id="mm-notif">${ICONS.bell}<span>Turn on notifications</span></button>` : '';
     const sheet = makeSheet('me', `
       <div class="m-sheet-grab"></div>
@@ -147,7 +147,7 @@
         <button class="m-menu-item danger" id="mm-signout">${ICONS.logout}<span>Sign out</span></button>
       </div>`);
     const notifBtn = sheet.el.querySelector('#mm-notif');
-    if (notifBtn) notifBtn.onclick = () => { window.PronetPush.enable(); sheet.close(); };
+    if (notifBtn) notifBtn.onclick = () => { window.ConnectikPush.enable(); sheet.close(); };
     const inst = sheet.el.querySelector('#mm-install');
     if (inst) inst.onclick = () => { sheet.close(); window.promptInstall && window.promptInstall(); };
     sheet.el.querySelector('#mm-settings').onclick = () => {

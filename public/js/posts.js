@@ -355,8 +355,8 @@ async function openSendModal(p) {
 async function openShareSheet(p) {
   return openShareSheetCore({
     url: `${location.origin}/feed.html#post-${p.id}`,
-    shareText: 'Check out this post on Pronet',
-    nativeTitle: 'Pronet post',
+    shareText: 'Check out this post on Connectik',
+    nativeTitle: 'Connectik post',
     sendLabel: 'Send as message',
     sendToConnection: async (to_user_id) => api(`/api/posts/${p.id}/send`, { method: 'POST', body: { to_user_id, note: '' } }),
     onCopy: async () => { try { await api(`/api/posts/${p.id}/share`, { method: 'POST' }); } catch (e) {} },
@@ -368,8 +368,8 @@ async function openProfileShareSheet(user) {
   const url = `${location.origin}/profile.html?id=${user.id}`;
   return openShareSheetCore({
     url,
-    shareText: `Check out ${user.name}'s profile on Pronet`,
-    nativeTitle: `${user.name} on Pronet`,
+    shareText: `Check out ${user.name}'s profile on Connectik`,
+    nativeTitle: `${user.name} on Connectik`,
     sendLabel: 'Send profile to a connection',
     sendToConnection: async (to_user_id) => api(`/api/messages/${to_user_id}`, { method: 'POST', body: { content: `Check out ${user.name}'s profile: ${url}` } }),
   });
@@ -465,7 +465,7 @@ async function openShareSheetCore(cfg) {
   if (navigator.share) {
     nativeBtn.onclick = async (e) => {
       e.preventDefault();
-      try { await navigator.share({ title: cfg.nativeTitle || 'Pronet', text, url }); close(); }
+      try { await navigator.share({ title: cfg.nativeTitle || 'Connectik', text, url }); close(); }
       catch (err) {}
     };
   } else {

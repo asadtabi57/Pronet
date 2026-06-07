@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pronet — Offline</title>
+  <title>Connectik — Offline</title>
   <style>
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
       background:#f5f6fc; color:#1f2937; display:flex; min-height:100vh; align-items:center; justify-content:center; }
     .wrap { text-align:center; padding:32px; }
-    .logo { width:72px; height:72px; border-radius:18px; background:linear-gradient(135deg,#4f46e5,#3f37c9);
-      color:#fff; font-weight:800; font-size:36px; display:flex; align-items:center; justify-content:center; margin:0 auto 20px; }
+    .logo { width:84px; height:84px; margin:0 auto 20px; }
+    .logo svg { width:100%; height:100%; display:block; }
     h1 { font-size:22px; margin:0 0 8px; }
     p { color:#6b7280; margin:0 0 20px; }
     button { background:#4f46e5; color:#fff; border:0; border-radius:999px; padding:12px 24px; font-size:15px; font-weight:600; cursor:pointer; }
@@ -17,9 +17,9 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="logo">P</div>
+    <div class="logo"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="offMintGlow" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs><rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/><rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/><rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#offMintGlow)" stroke-width="32"/><circle cx="256" cy="256" r="14" fill="#ffffff"/></svg></div>
     <h1>You're offline</h1>
-    <p>Pronet needs a connection for this. Check your network and try again.</p>
+    <p>Connectik needs a connection for this. Check your network and try again.</p>
     <button onclick="location.reload()">Retry</button>
   </div>
 </body>

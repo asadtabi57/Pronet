@@ -1,5 +1,5 @@
 /* ==========================================================================
-   ProNet — Design System
+   Connectik — Design System
    Premium, refined, glassmorphic. Stays close to LinkedIn's visual language
    while feeling lighter and more modern.
    ========================================================================== */
@@ -3118,3 +3118,55 @@ body.app {
 
 /* Onboarding / sheets already use var(--card); just soften the dim */
 [data-theme="dark"] .modal-backdrop, [data-theme="dark"] .m-sheet-back { background: rgba(0,0,0,.6); }
+
+/* ==========================================================================
+   BRAND LOGO (Infinite Link) + STARTUP SPLASH
+   ========================================================================== */
+.brand.brand-logo { background: transparent !important; padding: 0; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; }
+.brand.brand-logo svg { width: 100%; height: 100%; display: block; }
+.m-brand { background: transparent !important; padding: 0; overflow: hidden; }
+.m-brand svg { width: 100%; height: 100%; display: block; }
+.pn-ob-logo { background: transparent !important; }
+.pn-ob-logo svg { width: 100%; height: 100%; display: block; }
+
+/* ---- Splash overlay ---- */
+.splash-overlay {
+  position: fixed; inset: 0; z-index: 100000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-app);
+  transition: opacity .5s ease;
+}
+.splash-overlay.hide { opacity: 0; pointer-events: none; }
+html[data-splash="done"] .splash-overlay { display: none !important; }
+.splash-content { display: flex; flex-direction: column; align-items: center; }
+.splash-logo-svg {
+  width: 132px; height: 132px;
+  animation: introFade 1.5s ease-out forwards;
+}
+.splash-title {
+  margin: 22px 0 4px; font-size: 30px; font-weight: 800; letter-spacing: -.02em;
+  color: var(--ink); opacity: 0; animation: introFade 1.2s ease-out .4s forwards;
+}
+.splash-subtitle {
+  margin: 0; font-size: 15px; color: var(--muted);
+  opacity: 0; animation: introFade 1.2s ease-out .7s forwards;
+}
+
+.splash-logo-svg .link-left, .splash-logo-svg .link-right, .splash-logo-svg .center-hub {
+  transform-box: fill-box; transform-origin: center;
+}
+.splash-logo-svg .link-left { animation: mergeFromLeft 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.splash-logo-svg .link-right { animation: mergeFromRight 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.splash-logo-svg .center-hub { transform: scale(0); opacity: 0; animation: popCenterHub 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.5s forwards; }
+
+@keyframes mergeFromLeft  { 0% { transform: translateX(-160px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+@keyframes mergeFromRight { 0% { transform: translateX(160px);  opacity: 0; } 30% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+@keyframes popCenterHub   { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes introFade      { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-logo-svg, .splash-title, .splash-subtitle,
+  .splash-logo-svg .link-left, .splash-logo-svg .link-right, .splash-logo-svg .center-hub {
+    animation: none !important; opacity: 1 !important; transform: none !important;
+  }
+}

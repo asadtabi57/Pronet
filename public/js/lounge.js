@@ -1,5 +1,5 @@
 // ==========================================================================
-// Pronet — Co-Working Lounge
+// Connectik — Co-Working Lounge
 // A low-pressure presence room: see who's online ("in the zone") and share a
 // lofi stream. No backend changes — the grid is driven by the existing SSE
 // Presence set (window.Presence) plus a local `isInLounge` toggle for self.
