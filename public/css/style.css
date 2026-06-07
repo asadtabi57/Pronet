@@ -3139,25 +3139,39 @@ body.app {
 .splash-overlay.hide { opacity: 0; pointer-events: none; }
 html[data-splash="done"] .splash-overlay { display: none !important; }
 .splash-content { display: flex; flex-direction: column; align-items: center; }
+/* Animations are paused until the splash is actually visible (.play is added by
+   the control script on visibilitychange) so the WebAPK's native launch splash
+   doesn't "eat" the animation before the user can see it. */
 .splash-logo-svg {
   width: 138px; height: 138px;
   animation: introFade 1.5s ease-out forwards;
+  animation-play-state: paused;
 }
 .splash-title {
   margin: 22px 0 4px; font-size: 30px; font-weight: 800; letter-spacing: -.02em;
   color: #f1f5f9; opacity: 0; animation: introFade 1.2s ease-out .4s forwards;
+  animation-play-state: paused;
 }
 .splash-subtitle {
   margin: 0; font-size: 15px; color: #94a3b8;
   opacity: 0; animation: introFade 1.2s ease-out .7s forwards;
+  animation-play-state: paused;
 }
-
 .splash-logo-svg .link-left, .splash-logo-svg .link-right, .splash-logo-svg .center-hub {
   transform-box: fill-box; transform-origin: center;
 }
-.splash-logo-svg .link-left { animation: mergeFromLeft 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.splash-logo-svg .link-right { animation: mergeFromRight 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.splash-logo-svg .center-hub { transform: scale(0); opacity: 0; animation: popCenterHub 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.5s forwards; }
+.splash-logo-svg .link-left { animation: mergeFromLeft 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; animation-play-state: paused; }
+.splash-logo-svg .link-right { animation: mergeFromRight 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; animation-play-state: paused; }
+.splash-logo-svg .center-hub { transform: scale(0); opacity: 0; animation: popCenterHub 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.5s forwards; animation-play-state: paused; }
+/* Run all splash animations once the overlay is shown to the user. */
+.splash-overlay.play .splash-logo-svg,
+.splash-overlay.play .splash-title,
+.splash-overlay.play .splash-subtitle,
+.splash-overlay.play .splash-logo-svg .link-left,
+.splash-overlay.play .splash-logo-svg .link-right,
+.splash-overlay.play .splash-logo-svg .center-hub {
+  animation-play-state: running;
+}
 
 @keyframes mergeFromLeft  { 0% { transform: translateX(-160px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
 @keyframes mergeFromRight { 0% { transform: translateX(160px);  opacity: 0; } 30% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
