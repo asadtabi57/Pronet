@@ -3074,9 +3074,12 @@ body.app {
 [data-theme="dark"] .notif.unread:hover { background: #1f2940; }
 
 /* Chat */
+[data-theme="dark"] .msg-list { background: var(--bg-app-2); }
 [data-theme="dark"] .msg-conv-body {
   background: linear-gradient(180deg, #11151c 0%, #0e1218 100%);
 }
+[data-theme="dark"] .msg-thread.active { background: var(--brand-soft); }
+[data-theme="dark"] .msg-bubble.from-them { background: #232a36; color: var(--ink); border-color: #2f3747; }
 
 /* Chips */
 [data-theme="dark"] .skill-chip,
