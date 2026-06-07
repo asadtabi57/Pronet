@@ -157,6 +157,21 @@ async function exchangeSupabaseSession(accessToken) {
 }
 window.exchangeSupabaseSession = exchangeSupabaseSession;
 
+// ===== Theme (light / dark) =====
+// The initial theme is applied by an inline head script (server-injected) before
+// paint to avoid a flash. This just flips it at runtime and persists the choice.
+function setTheme(theme) {
+  const t = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('pn_theme', t); } catch (e) {}
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'dark' ? '#14181f' : '#4f46e5');
+}
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+window.setTheme = setTheme;
+
 let _signingOut = false;
 async function signOut(reason) {
   if (_signingOut) return; // collapse the parallel-401 storm into one teardown
@@ -798,6 +813,10 @@ async function openSettingsMenu(anchor) {
       </a>
       <div class="settings-section">
         <div class="settings-row">
+          <div class="sr-label"><span class="sr-title">Dark mode</span><span class="sr-sub">Switch between light and dark theme</span></div>
+          ${toggleSwitchHTML('set-darkmode', currentTheme() === 'dark')}
+        </div>
+        <div class="settings-row">
           <div class="sr-label"><span class="sr-title">Profile visibility</span><span class="sr-sub">Who can see your profile &amp; activity</span></div>
           <select class="sr-select" id="set-visibility">
             <option value="public"${vis === 'public' ? ' selected' : ''}>Public</option>
@@ -873,6 +892,15 @@ async function openSettingsMenu(anchor) {
   }
   wireToggle('set-online', 'is_online_visible');
   wireToggle('set-lastseen', 'is_last_seen_visible');
+
+  // Dark mode toggle (client-only preference — no server call).
+  const dm = back.querySelector('#set-darkmode');
+  if (dm) dm.addEventListener('click', () => {
+    const next = !dm.classList.contains('on');
+    dm.classList.toggle('on', next);
+    dm.setAttribute('aria-checked', next ? 'true' : 'false');
+    setTheme(next ? 'dark' : 'light');
+  });
 
   // Change password
   back.querySelector('#set-change-pw').onclick = () => { close(); openChangePasswordModal(); };

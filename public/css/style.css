@@ -3021,3 +3021,100 @@ body.app {
 @media (max-width: 768px) {
   .post { content-visibility: auto; contain-intrinsic-size: auto 380px; }
 }
+
+/* ==========================================================================
+   DARK THEME  (toggle in Settings → Dark mode). Flips design tokens + targeted
+   fixes for surfaces that used hardcoded light colors. WhatsApp/LinkedIn-style.
+   ========================================================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink:        #e9edf3;
+  --ink-2:      #c6ccd6;
+  --muted:      #9aa4b2;
+  --muted-2:    #6c7785;
+  --line:       #2b3340;
+  --line-2:     #232a35;
+  --hover:      #232b38;
+  --bg-app:     #12161d;
+  --bg-app-2:   #0e1218;
+  --card:       #1b212c;
+  --brand-soft: #232a47;
+  --brand-ring: rgba(99,102,241,.30);
+  --shadow-xs:  0 1px 2px rgba(0,0,0,.45);
+  --shadow-sm:  0 1px 3px rgba(0,0,0,.5);
+  --shadow-md:  0 4px 14px -4px rgba(0,0,0,.55);
+  --shadow-lg:  0 12px 32px -8px rgba(0,0,0,.6);
+  --shadow-pop: 0 18px 48px -12px rgba(0,0,0,.7);
+  --shadow-ambient: 0 8px 30px rgba(0,0,0,.5);
+}
+
+[data-theme="dark"] body { background: var(--bg-app); color: var(--ink-2); }
+[data-theme="dark"] body.app {
+  background: radial-gradient(1200px 600px at 50% -300px, #1a2230 0%, transparent 70%), var(--bg-app);
+}
+[data-theme="dark"] .hero {
+  background:
+    radial-gradient(80% 60% at 20% 0%, #241b2e 0%, transparent 60%),
+    radial-gradient(70% 60% at 100% 0%, #182238 0%, transparent 60%),
+    linear-gradient(180deg, #161b24 0%, #12161d 100%);
+}
+
+/* Form controls */
+[data-theme="dark"] input:not([type=checkbox]):not([type=radio]):not([type=range]),
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  background-color: var(--card); color: var(--ink); border-color: var(--line);
+}
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder { color: var(--muted-2); }
+[data-theme="dark"] #global-search { background: #232a35; color: var(--ink); }
+
+/* Notifications */
+[data-theme="dark"] .notif.unread { background: #1a2333; }
+[data-theme="dark"] .notif.unread:hover { background: #1f2940; }
+
+/* Chat */
+[data-theme="dark"] .msg-conv-body {
+  background: linear-gradient(180deg, #11151c 0%, #0e1218 100%);
+}
+
+/* Chips */
+[data-theme="dark"] .skill-chip,
+[data-theme="dark"] .tag-chip,
+[data-theme="dark"] .mini-chip { background: #232a36; color: var(--ink-2); border-color: #2f3747; }
+
+/* AI surfaces (were light gradients) */
+[data-theme="dark"] .ai-digest-card,
+[data-theme="dark"] .ai-score-card,
+[data-theme="dark"] .profile-completion {
+  background: linear-gradient(135deg, #1d2334, #1a2030); border-color: #2b3344;
+}
+[data-theme="dark"] .lead-dash-head { background: linear-gradient(135deg, #1d2334, #1a2030); border-color: #2b3344; }
+[data-theme="dark"] .ai-digest-head { color: #c4b5fd; }
+[data-theme="dark"] .ai-btn { background: linear-gradient(135deg, #262c4a, #2a2350); color: #c4b5fd; border-color: #3a4170; }
+[data-theme="dark"] .sr-pill { background: #232a47; color: #c7ccf0; border-color: #3a4170; }
+[data-theme="dark"] .match-badge { background: #2a2350; color: #c4b5fd; border-color: #3a4170; }
+[data-theme="dark"] .mi-bubble.from-ai { background: #262c3a; color: #dfe3ea; }
+
+/* ATS */
+[data-theme="dark"] .ats-drop:hover, [data-theme="dark"] .ats-drop.drag { background: #20283a; border-color: #6d5bd0; }
+[data-theme="dark"] .ats-drop.has-file { background: #16241c; border-color: #1f5132; }
+[data-theme="dark"] .ats-bar { background: #2a3140; }
+[data-theme="dark"] .ats-chip.match { background: #13241b; color: #6ee7a8; border-color: #1f5132; }
+[data-theme="dark"] .ats-chip.miss { background: #2a1718; color: #fca5a5; border-color: #5b2526; }
+
+/* Lead tags / confidence keep their accent tints but darker bg */
+[data-theme="dark"] .lead-tag { background: #232a3a; color: #c7ccd4; }
+[data-theme="dark"] .lead-tag.job_search { background: #13241b; color: #6ee7a8; }
+[data-theme="dark"] .lead-tag.tool_need { background: #15233f; color: #93c5fd; }
+[data-theme="dark"] .lead-tag.career_transition { background: #2a230f; color: #fcd34d; }
+
+/* Premium plan featured / sub banner */
+[data-theme="dark"] .sub-banner { background: linear-gradient(135deg, #1d2334, #1a2030); }
+
+/* Ring inner discs follow the card color */
+[data-theme="dark"] .pc-ring span, [data-theme="dark"] .ats-ring > span { background: var(--card); }
+[data-theme="dark"] .ats-ring span, [data-theme="dark"] .ats-ring small { color: var(--ink); }
+
+/* Onboarding / sheets already use var(--card); just soften the dim */
+[data-theme="dark"] .modal-backdrop, [data-theme="dark"] .m-sheet-back { background: rgba(0,0,0,.6); }
