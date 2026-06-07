@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Connectik â€” Lounge</title>
+  <title>Connectik — Lounge</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body class="app">
@@ -13,7 +13,7 @@
     <!-- 0. AI Mock Interview -->
     <section class="feature-section" id="ai-interview-section">
       <div class="feature-head">
-        <h2>âœ¨ AI Mock Interview</h2>
+        <h2>✨ AI Mock Interview</h2>
         <p>Practice out loud with an AI hiring manager. Speak or type your answers and get a scorecard at the end.</p>
       </div>
       <div class="card mi-card" id="mi-card">
@@ -24,7 +24,7 @@
           </div>
           <div class="field">
             <label>Paste a job description <span class="ai-subtle">(optional)</span></label>
-            <textarea id="mi-jd" rows="3" placeholder="Paste responsibilities / requirements to tailor the questionsâ€¦"></textarea>
+            <textarea id="mi-jd" rows="3" placeholder="Paste responsibilities / requirements to tailor the questions…"></textarea>
           </div>
           <button class="btn-fill" id="mi-start">Start interview</button>
           <p class="mi-note" id="mi-voice-note"></p>
@@ -33,13 +33,13 @@
         <div class="mi-live" id="mi-live" hidden>
           <div class="mi-transcript" id="mi-transcript"></div>
           <div class="mi-controls">
-            <button type="button" class="mi-mic" id="mi-mic" title="Hold to speak" aria-label="Speak your answer">ðŸŽ¤</button>
-            <textarea id="mi-answer" rows="1" placeholder="Type your answer, or use the micâ€¦"></textarea>
+            <button type="button" class="mi-mic" id="mi-mic" title="Hold to speak" aria-label="Speak your answer">🎤</button>
+            <textarea id="mi-answer" rows="1" placeholder="Type your answer, or use the mic…"></textarea>
             <button type="button" class="btn-fill" id="mi-send">Send</button>
           </div>
           <div class="mi-actions">
             <button type="button" class="btn-tiny ghost" id="mi-end">End & get scorecard</button>
-            <label class="mi-tts-toggle"><input type="checkbox" id="mi-tts" checked /> ðŸ”Š Read questions aloud</label>
+            <label class="mi-tts-toggle"><input type="checkbox" id="mi-tts" checked /> 🔊 Read questions aloud</label>
           </div>
         </div>
 
@@ -51,7 +51,7 @@
     <section class="feature-section" id="coworking-lounge">
       <div class="feature-head">
         <h2>Unbothered Co-Working Lounge</h2>
-        <p>Drop in, see who's around, and lock in to a shared lofi stream â€” no camera, no pressure.</p>
+        <p>Drop in, see who's around, and lock in to a shared lofi stream — no camera, no pressure.</p>
       </div>
       <div class="card lounge-card">
         <div class="lounge-card-top">
@@ -63,13 +63,13 @@
       </div>
 
       <div class="lounge-audio-bar" id="lounge-audio-bar">
-        <button type="button" class="la-btn" id="la-play" aria-label="Play lofi">â–¶</button>
+        <button type="button" class="la-btn" id="la-play" aria-label="Play lofi">▶</button>
         <div class="la-meta">
           <div class="la-title">Lofi Focus Stream</div>
           <div class="la-sub" id="la-status">Paused</div>
         </div>
         <div class="la-eq" id="la-eq" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-        <button type="button" class="la-btn la-mute" id="la-mute" aria-label="Mute">ðŸ”‡</button>
+        <button type="button" class="la-btn la-mute" id="la-mute" aria-label="Mute">🔇</button>
         <!-- Placeholder royalty-free stream; swap for your own lofi MP3 anytime. -->
         <audio id="lounge-audio" loop muted preload="none"
                src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3"></audio>
@@ -79,21 +79,21 @@
     <!-- 2. ATS Resume Analyzer -->
     <section class="feature-section" id="ats-section">
       <div class="feature-head">
-        <h2>âœ¨ ATS Resume Analyzer</h2>
-        <p>Upload your PDF resume to get an instant ATS score, then let AI tailor it to any job â€” keyword-optimized and recruiter-ready.</p>
+        <h2>✨ ATS Resume Analyzer</h2>
+        <p>Upload your PDF resume to get an instant ATS score, then let AI tailor it to any job — keyword-optimized and recruiter-ready.</p>
       </div>
       <div class="card ats-card" id="ats-card">
         <div class="ats-setup" id="ats-setup">
           <div class="ats-drop" id="ats-drop">
             <input type="file" id="ats-file" accept="application/pdf,.pdf" hidden />
             <div class="ats-drop-inner">
-              <div class="ats-drop-ic">ðŸ“„</div>
-              <div class="ats-drop-text"><b id="ats-filename">Upload your resume (PDF)</b><span>Click to browse or drop a file here Â· max 5 MB</span></div>
+              <div class="ats-drop-ic">📄</div>
+              <div class="ats-drop-text"><b id="ats-filename">Upload your resume (PDF)</b><span>Click to browse or drop a file here · max 5 MB</span></div>
             </div>
           </div>
           <div class="field">
             <label>Paste the job description <span class="ai-subtle">(optional, improves accuracy)</span></label>
-            <textarea id="ats-jd" rows="4" placeholder="Paste the job posting you're targetingâ€¦"></textarea>
+            <textarea id="ats-jd" rows="4" placeholder="Paste the job posting you're targeting…"></textarea>
           </div>
           <button class="btn-fill" id="ats-analyze" disabled>Analyze my resume</button>
           <p class="ats-note" id="ats-note"></p>

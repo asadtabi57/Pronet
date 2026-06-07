@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Connectik â€” Connect, Collaborate, Grow</title>
+  <title>Connectik — Connect, Collaborate, Grow</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
@@ -14,7 +14,7 @@
         <div class="nav-links">
           <a href="#">Home</a><a href="#">About</a><a href="#">Services</a><a href="#">Contact</a><a href="#">Blog</a>
         </div>
-        <button class="menu-icon" aria-label="menu">â˜°</button>
+        <button class="menu-icon" aria-label="menu">☰</button>
       </div>
       <div class="nav-right">
         <a href="#login" class="btn">Sign In</a>
@@ -43,7 +43,7 @@
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input id="password" name="password" type="password" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+        <input id="password" name="password" type="password" placeholder="••••••••••"
                autocomplete="current-password" required />
       </div>
       <div class="row-between">
@@ -69,7 +69,7 @@
       <button class="btn btn-primary btn-block" id="login-otp-verify" type="button">Verify &amp; continue</button>
       <p class="center-muted">
         <a class="link" id="login-otp-resend" href="#">Resend code</a>
-        &nbsp;Â·&nbsp; <a class="link" id="login-otp-cancel" href="#">Back to login</a>
+        &nbsp;·&nbsp; <a class="link" id="login-otp-cancel" href="#">Back to login</a>
       </p>
     </div>
   </section>
@@ -111,11 +111,11 @@
         <p class="fp-sub">We sent a 6-digit code to <b id="fp-email-echo"></b>. It expires in 10 minutes.</p>
         <div class="fp-field">
           <label for="fp-otp">6-digit code</label>
-          <input id="fp-otp" type="text" inputmode="numeric" maxlength="6" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢" autocomplete="one-time-code" />
+          <input id="fp-otp" type="text" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code" />
         </div>
         <p class="fp-msg" id="fp-msg-otp"></p>
         <button class="btn btn-primary btn-block" id="fp-verify-btn" type="button">Verify code</button>
-        <p class="center-muted"><a href="#" class="link" id="fp-resend">Resend code</a> Â· <a href="#" class="link" id="fp-back-email">Change email</a></p>
+        <p class="center-muted"><a href="#" class="link" id="fp-resend">Resend code</a> · <a href="#" class="link" id="fp-back-email">Change email</a></p>
       </div>
 
       <!-- Step 3: new password -->
@@ -137,7 +137,7 @@
 
       <!-- Step 4: success -->
       <div class="fp-step" data-step="done" hidden>
-        <div class="fp-success">âœ“</div>
+        <div class="fp-success">✓</div>
         <h3>Password updated</h3>
         <p class="fp-sub">You can now sign in with your new password.</p>
         <button class="btn btn-primary btn-block" id="fp-done-btn" type="button">Back to sign in</button>
@@ -154,7 +154,7 @@
       if (Session.isValid()) { location.href = '/feed.html'; return; }
       Session.clear();
       if (window.sb) {
-        // Don't auto-sign-in from a stale Supabase session â€” require an explicit click.
+        // Don't auto-sign-in from a stale Supabase session — require an explicit click.
         try { await window.sb.auth.signOut(); } catch (e) {}
       }
     })();
@@ -165,7 +165,7 @@
       const password = document.getElementById('password').value;
       const err = document.getElementById('login-error'); err.textContent = '';
 
-      // 1) Backend first â€” this enforces our email_verified / OTP gate so it
+      // 1) Backend first — this enforces our email_verified / OTP gate so it
       //    can't be bypassed. New accounts always live here (bcrypt password).
       try {
         const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
@@ -206,7 +206,7 @@
       document.getElementById('login-form').style.display = 'none';
       document.getElementById('login-otp').style.display = '';
       const e = document.getElementById('login-otp-error');
-      e.style.color = ''; e.textContent = 'Sending a codeâ€¦';
+      e.style.color = ''; e.textContent = 'Sending a code…';
       try {
         const r = await api('/api/auth/signup/resend-otp', { method: 'POST', body: { email } });
         e.textContent = r.dev_otp ? ('Dev code: ' + r.dev_otp) : '';
@@ -218,7 +218,7 @@
       const e = document.getElementById('login-otp-error'); e.style.color = ''; e.textContent = '';
       if (!/^\d{6}$/.test(otp)) { e.textContent = 'Enter the 6-digit code.'; return; }
       const btn = document.getElementById('login-otp-verify');
-      btn.disabled = true; btn.textContent = 'Verifyingâ€¦';
+      btn.disabled = true; btn.textContent = 'Verifying…';
       try {
         const data = await api('/api/auth/signup/verify-otp', { method: 'POST', body: { email: loginOtpEmail, otp } });
         Session.setToken(data.token);
@@ -295,7 +295,7 @@
       }
       function busy(btn, on, label) {
         btn.disabled = on;
-        if (on) { btn.dataset.label = btn.textContent; btn.textContent = label || 'Please waitâ€¦'; }
+        if (on) { btn.dataset.label = btn.textContent; btn.textContent = label || 'Please wait…'; }
         else if (btn.dataset.label) { btn.textContent = btn.dataset.label; }
       }
 
@@ -304,12 +304,12 @@
       overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('open')) close(); });
 
-      // Step 1 â†’ send code
+      // Step 1 → send code
       async function sendCode() {
         const email = document.getElementById('fp-email').value.trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { msg('fp-msg-email', 'Please enter a valid email address.'); return; }
         const btn = document.getElementById('fp-send-btn');
-        busy(btn, true, 'Sendingâ€¦');
+        busy(btn, true, 'Sending…');
         try {
           const r = await api('/api/auth/forgot-password/request', { method: 'POST', body: { email } });
           fpEmail = email;
@@ -318,7 +318,7 @@
           show('otp');
           setTimeout(() => document.getElementById('fp-otp').focus(), 50);
         } catch (ex) {
-          // Non-member fallback: the email isn't registered â€” block recovery and
+          // Non-member fallback: the email isn't registered — block recovery and
           // invite them to sign up instead of advancing to the OTP step.
           if (ex && ex.status === 404) {
             document.getElementById('fp-send-btn').hidden = true;
@@ -330,7 +330,7 @@
         } finally { busy(btn, false); }
       }
       document.getElementById('fp-send-btn').addEventListener('click', sendCode);
-      // Non-member fallback â†’ transition over to the Signup view.
+      // Non-member fallback → transition over to the Signup view.
       document.getElementById('fp-goto-signup').addEventListener('click', () => {
         close();
         location.href = '/signup.html';
@@ -338,12 +338,12 @@
       document.getElementById('fp-resend').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
       document.getElementById('fp-back-email').addEventListener('click', (e) => { e.preventDefault(); show('email'); });
 
-      // Step 2 â†’ verify code
+      // Step 2 → verify code
       document.getElementById('fp-verify-btn').addEventListener('click', async () => {
         const otp = document.getElementById('fp-otp').value.trim();
         if (!/^\d{6}$/.test(otp)) { msg('fp-msg-otp', 'Enter the 6-digit code.'); return; }
         const btn = document.getElementById('fp-verify-btn');
-        busy(btn, true, 'Verifyingâ€¦');
+        busy(btn, true, 'Verifying…');
         try {
           await api('/api/auth/forgot-password/verify', { method: 'POST', body: { email: fpEmail, otp } });
           fpOtp = otp;
@@ -354,7 +354,7 @@
         } finally { busy(btn, false); }
       });
 
-      // Step 3 â†’ reset password
+      // Step 3 → reset password
       document.getElementById('fp-reset-btn').addEventListener('click', async () => {
         const p1 = document.getElementById('fp-pass').value;
         const p2 = document.getElementById('fp-pass2').value;
@@ -363,7 +363,7 @@
         if (!strong) { msg('fp-msg-pass', 'Use 8+ characters with uppercase, lowercase, a number and a special character.'); return; }
         if (p1 !== p2) { msg('fp-msg-pass', 'Passwords do not match.'); return; }
         const btn = document.getElementById('fp-reset-btn');
-        busy(btn, true, 'Updatingâ€¦');
+        busy(btn, true, 'Updating…');
         try {
           await api('/api/auth/forgot-password/reset', { method: 'POST', body: { email: fpEmail, otp: fpOtp, password: p1 } });
           show('done');

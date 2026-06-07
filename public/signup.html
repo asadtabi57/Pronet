@@ -36,7 +36,7 @@
       <button class="btn btn-primary btn-block" id="otp-verify-btn" type="button">Verify &amp; continue</button>
       <p class="center-muted">
         Didn't get it? <a class="link" id="otp-resend" href="#">Resend code</a>
-        &nbsp;Â·&nbsp; <a class="link" id="otp-back" href="#">Change email</a>
+        &nbsp;·&nbsp; <a class="link" id="otp-back" href="#">Change email</a>
       </p>
     </div>
   </section>
@@ -67,7 +67,7 @@
         const password = document.getElementById('password').value;
         err.style.color = ''; err.textContent = '';
         const btn = e.target.querySelector('button[type="submit"]');
-        btn.disabled = true; btn.textContent = 'Sending codeâ€¦';
+        btn.disabled = true; btn.textContent = 'Sending code…';
         try {
           const data = await api('/api/auth/signup', { method: 'POST', body: { name, email, password, headline } });
           if (data.needs_otp) showOtpStep(data.email || email.toLowerCase(), data.dev_otp);
@@ -88,7 +88,7 @@
         otpErr.style.color = ''; otpErr.textContent = '';
         if (!/^\d{6}$/.test(otp)) { otpErr.textContent = 'Enter the 6-digit code.'; return; }
         const btn = document.getElementById('otp-verify-btn');
-        btn.disabled = true; btn.textContent = 'Verifyingâ€¦';
+        btn.disabled = true; btn.textContent = 'Verifying…';
         try {
           const data = await api('/api/auth/signup/verify-otp', { method: 'POST', body: { email: pendingEmail, otp } });
           Session.setToken(data.token);
@@ -106,7 +106,7 @@
 
       document.getElementById('otp-resend').addEventListener('click', async (e) => {
         e.preventDefault();
-        otpErr.style.color = ''; otpErr.textContent = 'Sending a new codeâ€¦';
+        otpErr.style.color = ''; otpErr.textContent = 'Sending a new code…';
         try {
           const data = await api('/api/auth/signup/resend-otp', { method: 'POST', body: { email: pendingEmail } });
           otpErr.style.color = '#057642';

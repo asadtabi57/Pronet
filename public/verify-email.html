@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Verify Email Â· Connectik</title>
+  <title>Verify Email · Connectik</title>
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body class="auth-page">
   <section class="login-card">
-    <h2>Verifying your emailâ€¦</h2>
+    <h2>Verifying your email…</h2>
     <p id="status" class="sub">Please wait.</p>
     <div id="actions" style="display:none;margin-top:16px">
       <a href="/" class="btn btn-primary btn-block">Go to Sign In</a>
@@ -39,7 +39,7 @@
           status.style.color = '#057642';
           status.textContent = data.already
             ? 'Your email is already verified. You can sign in.'
-            : 'âœ… Email verified! You can now sign in.';
+            : '✅ Email verified! You can now sign in.';
           actions.style.display = 'block';
         } else {
           status.style.color = '#b24020';
