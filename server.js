@@ -42,7 +42,10 @@ q('SELECT 1').catch(() => {});
 
 // ---------------- Auth helpers ----------------
 function signToken(user) {
-  return jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '30d' });
+  // Long-lived token so installed-app users stay signed in. Active users get a
+  // sliding refresh in authRequired, so in practice the session never expires
+  // until they log out (or we rotate JWT_SECRET / force a re-login).
+  return jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '365d' });
 }
 
 // ---------------- Secure session cookie (mitigates token theft via XSS) ----
@@ -65,7 +68,7 @@ function authCookieOptions(req) {
   };
 }
 function setAuthCookie(req, res, token) {
-  res.cookie(AUTH_COOKIE, token, { ...authCookieOptions(req), maxAge: 30 * 24 * 60 * 60 * 1000 });
+  res.cookie(AUTH_COOKIE, token, { ...authCookieOptions(req), maxAge: 365 * 24 * 60 * 60 * 1000 });
 }
 function clearAuthCookie(req, res) {
   res.clearCookie(AUTH_COOKIE, authCookieOptions(req));
@@ -159,6 +162,17 @@ async function authRequired(req, res, next) {
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     req.user.id = Number(req.user.id); // BIGINT ids are strings in the JWT; normalize for comparisons
+    // Sliding refresh: re-issue the cookie once it's more than a few days old so
+    // active (installed-app) users effectively never get logged out by expiry.
+    try {
+      const fromCookie = req.cookies && req.cookies[AUTH_COOKIE] === token;
+      if (fromCookie && req.user.exp) {
+        const remainingMs = req.user.exp * 1000 - Date.now();
+        if (remainingMs < 358 * 24 * 60 * 60 * 1000) {
+          setAuthCookie(req, res, signToken(req.user));
+        }
+      }
+    } catch (e) { /* refresh is best-effort */ }
     return next();
   } catch (e) { /* try supabase */ }
   const sbUser = await verifySupabaseToken(token);

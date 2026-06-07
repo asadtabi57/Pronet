@@ -1,52 +1,74 @@
 // ===== Session management =====
-// - The JWT now lives in a secure, httpOnly cookie set by the backend, so it is
-//   NOT readable by JS (mitigates token theft via XSS). We only keep a
-//   non-sensitive `authed` marker + idle timestamp in sessionStorage for the
-//   client-side 5-minute inactivity timeout and route gating.
-// - Any mouse / keyboard / touch / scroll activity refreshes the idle timer.
+// - The JWT lives in a secure, httpOnly cookie set by the backend (not readable
+//   by JS). We keep a non-sensitive `authed` marker + activity timestamp client
+//   side for route gating.
+// - INSTALLED APP (standalone PWA): the session is PERSISTENT — stored in
+//   localStorage with NO inactivity timeout, so the user stays logged in across
+//   app restarts until they sign out (or we bump AUTH_EPOCH for a breaking
+//   update). The cookie is long-lived (1y) + sliding-refreshed server-side.
+// - BROWSER TAB: previous behavior — sessionStorage + a 5-minute idle timeout.
+
+// Bump this string to force every client to re-authenticate after a breaking
+// update (e.g. an auth change). Leave it stable for normal feature deploys so
+// people are NOT logged out on every release.
+const AUTH_EPOCH = '1';
+
+// "App mode" = launched as an installed PWA (standalone display mode).
+function isAppMode() {
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+  } catch (e) { return false; }
+}
 
 const Session = (() => {
-  const IDLE_MS = 5 * 60 * 1000; // 5 minutes
+  const IDLE_MS = 5 * 60 * 1000; // 5 minutes (browser tabs only)
+  const APP = isAppMode();
+  const store = APP ? window.localStorage : window.sessionStorage;
   const AUTH_KEY = 'authed';
   const USER_KEY = 'user';
   const LAST_KEY = 'last_activity';
   const AUTHED_AT_KEY = 'authed_at';
+  const EPOCH_KEY = 'auth_epoch';
 
   function now() { return Date.now(); }
 
   function setAuthed() {
-    sessionStorage.setItem(AUTH_KEY, '1');
-    sessionStorage.setItem(LAST_KEY, String(now()));
-    sessionStorage.setItem(AUTHED_AT_KEY, String(now()));
+    store.setItem(AUTH_KEY, '1');
+    store.setItem(LAST_KEY, String(now()));
+    store.setItem(AUTHED_AT_KEY, String(now()));
+    store.setItem(EPOCH_KEY, AUTH_EPOCH);
     clearRedirectGuard();
   }
   // Back-compat: older call sites passed a token string. We no longer store the
   // token (it's in the httpOnly cookie); just record that we're authenticated.
   function setToken(_t) { setAuthed(); }
-  function isAuthed() { return sessionStorage.getItem(AUTH_KEY) === '1'; }
-  // True for a short grace window right after login/signup. On mobile the
-  // httpOnly cookie can lag a beat behind the redirect, so a request fired in
-  // this window that 401s should be retried — not treated as a dead session.
+  function isAuthed() {
+    if (store.getItem(AUTH_KEY) !== '1') return false;
+    // Forced logout on a breaking update: stored epoch no longer matches.
+    if ((store.getItem(EPOCH_KEY) || '') !== AUTH_EPOCH) return false;
+    return true;
+  }
   function justAuthed() {
-    const v = Number(sessionStorage.getItem(AUTHED_AT_KEY) || 0);
+    const v = Number(store.getItem(AUTHED_AT_KEY) || 0);
     return v > 0 && (now() - v) < 12000;
   }
   function clear() {
-    sessionStorage.removeItem(AUTH_KEY);
-    sessionStorage.removeItem(USER_KEY);
-    sessionStorage.removeItem(LAST_KEY);
-    sessionStorage.removeItem(AUTHED_AT_KEY);
+    // Clear from BOTH stores so switching browser <-> app never leaves a stale marker.
+    [AUTH_KEY, USER_KEY, LAST_KEY, AUTHED_AT_KEY, EPOCH_KEY].forEach(k => {
+      try { localStorage.removeItem(k); } catch (e) {}
+      try { sessionStorage.removeItem(k); } catch (e) {}
+    });
   }
   function touch() {
-    if (isAuthed()) {
-      sessionStorage.setItem(LAST_KEY, String(now()));
-    }
+    if (isAuthed()) store.setItem(LAST_KEY, String(now()));
   }
   function lastActivity() {
-    const v = sessionStorage.getItem(LAST_KEY);
+    const v = store.getItem(LAST_KEY);
     return v ? Number(v) : 0;
   }
   function isExpired() {
+    if (APP) return false; // installed app never idles out
     const last = lastActivity();
     return last > 0 && (now() - last) > IDLE_MS;
   }
@@ -54,11 +76,14 @@ const Session = (() => {
     return isAuthed() && !isExpired();
   }
   function msRemaining() {
+    if (APP) return Infinity;
     const last = lastActivity();
     if (!last) return IDLE_MS;
     return Math.max(0, IDLE_MS - (now() - last));
   }
-  return { setAuthed, setToken, isAuthed, justAuthed, clear, touch, isExpired, isValid, msRemaining, IDLE_MS };
+  function getUser() { try { return JSON.parse(store.getItem(USER_KEY) || 'null'); } catch (e) { return null; } }
+  function setUser(u) { try { store.setItem(USER_KEY, JSON.stringify(u)); } catch (e) {} touch(); }
+  return { setAuthed, setToken, isAuthed, justAuthed, clear, touch, isExpired, isValid, msRemaining, IDLE_MS, app: APP, getUser, setUser };
 })();
 
 // Circuit breaker for the auth redirect. If the app bounces to the landing page
@@ -321,8 +346,8 @@ function avatar(u, size = 'sm') {
   return `<div class="avatar ${size}${onlineCls}"${uidAttr} style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}${dot}</div>`;
 }
 
-function getMe() { try { return JSON.parse(sessionStorage.getItem('user') || 'null'); } catch { return null; } }
-function setMe(u) { sessionStorage.setItem('user', JSON.stringify(u)); Session.touch(); }
+function getMe() { return Session.getUser(); }
+function setMe(u) { Session.setUser(u); }
 function requireAuth() {
   if (!Session.isValid()) {
     signOut(Session.isAuthed() ? 'Session expired due to inactivity.' : null);
@@ -331,8 +356,9 @@ function requireAuth() {
   return true;
 }
 
-// ===== Inactivity tracker =====
+// ===== Inactivity tracker (browser tabs only — disabled in the installed app) =====
 (function installIdleTracker() {
+  if (Session.app) return; // installed PWA: persistent login, no idle timeout
   // If user lands here already idle (e.g. switched tabs > 5 min), sign out right away.
   if (Session.isExpired()) {
     signOut('Session expired due to inactivity.');
