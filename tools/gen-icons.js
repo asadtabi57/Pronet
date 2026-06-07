@@ -113,13 +113,15 @@ function renderIcon(S, { maskable }) {
 
 const outDir = path.join(__dirname, '..', 'public', 'icons');
 fs.mkdirSync(outDir, { recursive: true });
+// Versioned filenames ("-ck1") so a rebrand bypasses every cache layer
+// (browser HTTP cache, service worker, and the Android WebAPK icon cache).
 const targets = [
-  ['icon-192.png', 192, { maskable: false }],
-  ['icon-512.png', 512, { maskable: false }],
-  ['icon-maskable-192.png', 192, { maskable: true }],
-  ['icon-maskable-512.png', 512, { maskable: true }],
-  ['apple-touch-icon.png', 180, { maskable: true }],
-  ['favicon-32.png', 32, { maskable: false }],
+  ['icon-192-ck1.png', 192, { maskable: false }],
+  ['icon-512-ck1.png', 512, { maskable: false }],
+  ['icon-maskable-192-ck1.png', 192, { maskable: true }],
+  ['icon-maskable-512-ck1.png', 512, { maskable: true }],
+  ['apple-touch-icon-ck1.png', 180, { maskable: true }],
+  ['favicon-32-ck1.png', 32, { maskable: false }],
 ];
 for (const [name, size, opts] of targets) {
   fs.writeFileSync(path.join(outDir, name), renderIcon(size, opts));

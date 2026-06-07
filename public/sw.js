@@ -4,7 +4,7 @@
 //   • navigations    -> network-first, fall back to cached page, then offline.html
 //   • static assets  -> stale-while-revalidate (instant load, refresh in bg)
 //   • cross-origin   -> passthrough (CDNs, Gemini, Supabase handle themselves)
-const VERSION = 'pronet-v3';
+const VERSION = 'pronet-v4';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 
@@ -12,8 +12,8 @@ const SHELL_ASSETS = [
   '/offline.html',
   '/css/style.css',
   '/js/app.js',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+  '/icons/icon-192-ck1.png',
+  '/icons/icon-512-ck1.png',
   '/manifest.webmanifest',
 ];
 
@@ -86,8 +86,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'Connectik';
   const options = {
     body: data.body || '',
-    icon: data.icon || '/icons/icon-192.png',
-    badge: data.badge || '/icons/icon-192.png',
+    icon: data.icon || '/icons/icon-192-ck1.png',
+    badge: data.badge || '/icons/icon-192-ck1.png',
     tag: data.tag || 'pronet',
     renotify: true,
     requireInteraction: isCall ? true : !!data.requireInteraction,

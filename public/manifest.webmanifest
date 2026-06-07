@@ -2,8 +2,8 @@
   "name": "Connectik — Connect, Collaborate, Grow",
   "short_name": "Connectik",
   "description": "Connectik is a professional networking app: feed, messaging, smart connections, and AI career tools.",
-  "id": "/?source=pwa",
-  "start_url": "/feed.html?source=pwa",
+  "id": "/?app=connectik",
+  "start_url": "/feed.html?source=connectik",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
@@ -12,14 +12,14 @@
   "background_color": "#0e1218",
   "categories": ["business", "social", "productivity"],
   "icons": [
-    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
-    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    { "src": "/icons/icon-192-ck1.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-ck1.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-192-ck1.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-maskable-512-ck1.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Home feed", "short_name": "Home", "url": "/feed.html?source=pwa", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Messaging", "short_name": "Messages", "url": "/messages.html?source=pwa", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
-    { "name": "My Network", "short_name": "Network", "url": "/network.html?source=pwa", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+    { "name": "Home feed", "short_name": "Home", "url": "/feed.html?source=pwa", "icons": [{ "src": "/icons/icon-192-ck1.png", "sizes": "192x192" }] },
+    { "name": "Messaging", "short_name": "Messages", "url": "/messages.html?source=pwa", "icons": [{ "src": "/icons/icon-192-ck1.png", "sizes": "192x192" }] },
+    { "name": "My Network", "short_name": "Network", "url": "/network.html?source=pwa", "icons": [{ "src": "/icons/icon-192-ck1.png", "sizes": "192x192" }] }
   ]
 }
