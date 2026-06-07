@@ -546,6 +546,12 @@ const BUILD_ID = Date.now().toString(36);
 const fsSync = require('fs');
 // Auto-version CSS/JS in HTML so browsers always pick up the latest after deploy
 const htmlCache = new Map();
+// PWA glue injected into every served page: manifest, theme color, iOS meta,
+// icons, and the SW-registration + mobile-app-shell scripts. The mobile shell
+// self-disables on pages without #top-nav (landing/auth), so this is safe to
+// add globally.
+const PWA_HEAD = `\n  <link rel="manifest" href="/manifest.webmanifest" />\n  <meta name="theme-color" content="#4f46e5" />\n  <meta name="mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="default" />\n  <meta name="apple-mobile-web-app-title" content="Pronet" />\n  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />\n  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />\n`;
+const PWA_BODY = `\n  <script src="/js/pwa.js"></script>\n  <script src="/js/mobile.js"></script>\n`;
 function serveVersionedHtml(req, res, next, fileName) {
   const filePath = path.join(__dirname, 'public', fileName || req.path);
   const cacheKey = filePath + ':' + BUILD_ID;
@@ -554,6 +560,13 @@ function serveVersionedHtml(req, res, next, fileName) {
     try {
       html = fsSync.readFileSync(filePath, 'utf8');
     } catch (e) { return next ? next() : res.status(404).end(); }
+    // Inject PWA glue (idempotent guards).
+    if (html.indexOf('manifest.webmanifest') === -1 && html.indexOf('</head>') !== -1) {
+      html = html.replace('</head>', PWA_HEAD + '</head>');
+    }
+    if (html.indexOf('/js/mobile.js') === -1 && html.indexOf('</body>') !== -1) {
+      html = html.replace('</body>', PWA_BODY + '</body>');
+    }
     html = html.replace(/(src|href)="(\/[^"]+\.(?:css|js))"/g, `$1="$2?v=${BUILD_ID}"`);
     htmlCache.set(cacheKey, html);
   }
@@ -568,6 +581,26 @@ function serveVersionedHtml(req, res, next, fileName) {
 // why returning (non-incognito) browsers kept running stale app.js.
 app.get('/', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'));
 app.get(/\.html$/, (req, res, next) => serveVersionedHtml(req, res, next));
+
+// --- PWA endpoints (must precede express.static so we control caching/types) ---
+// Service worker: never cache, and allow root scope.
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+});
+app.get('/manifest.webmanifest', (req, res) => {
+  res.type('application/manifest+json');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.sendFile(path.join(__dirname, 'public', 'manifest.webmanifest'));
+});
+// Digital Asset Links for a Play Store TWA (dotfile dir is ignored by static).
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.type('application/json');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.sendFile(path.join(__dirname, 'public', '.well-known', 'assetlinks.json'));
+});
 
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
