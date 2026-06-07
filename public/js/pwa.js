@@ -76,4 +76,63 @@
     return window.matchMedia('(display-mode: standalone)').matches
       || window.navigator.standalone === true;
   };
+
+  // ---- iOS one-time "Add to Home Screen" hint ----
+  // iOS has no install prompt, so we coach the user. Shown once per device, only
+  // on the actual app pages, and never when already installed.
+  function isIOS() {
+    const ua = navigator.userAgent || '';
+    const iDevice = /iphone|ipad|ipod/i.test(ua);
+    const iPadOS = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    return iDevice || iPadOS;
+  }
+  function showIOSInstallHint() {
+    if (document.querySelector('.ios-hint-back')) return;
+    const isChrome = /CriOS|EdgiOS|FxiOS/i.test(navigator.userAgent);
+    const where = isChrome ? 'in the browser menu (•••)' : 'in the bottom toolbar';
+    const logo = '<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="iosMint" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs><rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/><rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/><rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#iosMint)" stroke-width="32"/><circle cx="256" cy="256" r="14" fill="#ffffff"/></svg>';
+    const back = document.createElement('div');
+    back.className = 'ios-hint-back';
+    back.innerHTML =
+      '<div class="ios-hint-sheet" role="dialog" aria-label="Install Connectik">' +
+        '<button class="ios-hint-x" aria-label="Close">×</button>' +
+        '<div class="ios-hint-logo">' + logo + '</div>' +
+        '<h3>Install Connectik</h3>' +
+        '<p>Add Connectik to your Home Screen for a full-screen app with notifications.</p>' +
+        '<ol class="ios-hint-steps">' +
+          '<li>Tap the <strong>Share</strong> icon ' +
+            '<span class="ios-share-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M8 8l4-4 4 4"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span> ' + where + '</li>' +
+          '<li>Choose <strong>Add to Home Screen</strong></li>' +
+          '<li>Tap <strong>Add</strong></li>' +
+        '</ol>' +
+        '<button class="ios-hint-ok">Got it</button>' +
+      '</div>';
+    document.body.appendChild(back);
+    requestAnimationFrame(() => back.classList.add('show'));
+    const close = () => {
+      try { localStorage.setItem('connectik_ios_hint', '1'); } catch (e) {}
+      back.classList.remove('show');
+      setTimeout(() => back.remove(), 300);
+    };
+    back.querySelector('.ios-hint-x').onclick = close;
+    back.querySelector('.ios-hint-ok').onclick = close;
+    back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  }
+  function maybeIOSHint() {
+    try {
+      if (!isIOS()) return;
+      if (window.isStandalonePWA && window.isStandalonePWA()) return;
+      if (localStorage.getItem('connectik_ios_hint') === '1') return;
+      const p = location.pathname;
+      if (p === '/' || /\/(index|signup|verify-email)\.html$/.test(p)) return; // skip public pages
+      setTimeout(showIOSInstallHint, 2500);
+    } catch (e) {}
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', maybeIOSHint);
+  } else {
+    maybeIOSHint();
+  }
+  // Let other code (e.g. a Settings menu) re-trigger the hint on demand.
+  window.showIOSInstallHint = showIOSInstallHint;
 })();

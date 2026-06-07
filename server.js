@@ -2317,10 +2317,18 @@ async function storeChatAttachment(att, fromId, toId) {
 // ---- Post media upload (images ≤ 1 MB, videos ≤ 5 MB) → Supabase Storage ----
 const POST_IMG_MAX = 1 * 1024 * 1024;  // 1 MB
 const POST_VID_MAX = 5 * 1024 * 1024;  // 5 MB
+// HEIC/HEIF (iPhone photos) can't be rendered by browsers, so we convert them to
+// JPEG server-side. Loaded lazily/guarded so a missing optional dep can't crash boot.
+let heicConvert = null;
+try { heicConvert = require('heic-convert'); } catch (e) { heicConvert = null; }
 const POST_MEDIA_EXT = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv', 'video/quicktime': 'mov',
 };
+function looksHeic(mime, name) {
+  return mime === 'image/heic' || mime === 'image/heif' ||
+    /\.(heic|heif)$/i.test(String(name || ''));
+}
 const postMediaUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: POST_VID_MAX, files: 1 },
@@ -2328,7 +2336,7 @@ const postMediaUpload = multer({
 function uploadPostMedia(req, res, next) {
   postMediaUpload.single('file')(req, res, (err) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Video too large (max 5 MB)' });
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'File too large (max 5 MB)' });
       return res.status(400).json({ error: 'Upload failed' });
     }
     next();
@@ -2337,30 +2345,48 @@ function uploadPostMedia(req, res, next) {
 app.post('/api/posts/media', authRequired, uploadPostMedia, wrap(async (req, res) => {
   const f = req.file;
   if (!f || !f.buffer || !f.buffer.length) return res.status(400).json({ error: 'No file' });
-  const mime = String(f.mimetype || '').toLowerCase();
+  let mime = String(f.mimetype || '').toLowerCase();
+  let buf = f.buffer;
+  let converted = false;
+
+  // iPhone HEIC/HEIF → JPEG so it can actually be displayed in the feed.
+  if (looksHeic(mime, f.originalname)) {
+    if (!heicConvert) return res.status(415).json({ error: 'HEIC images aren’t supported here — please use JPG or PNG.' });
+    try {
+      const out = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.82 });
+      buf = Buffer.from(out);
+      mime = 'image/jpeg';
+      converted = true;
+    } catch (e) {
+      return res.status(415).json({ error: 'Could not read that HEIC image — please use JPG or PNG.' });
+    }
+  }
+
   const ext = POST_MEDIA_EXT[mime];
   if (!ext) return res.status(415).json({ error: 'Only image or video files are allowed' });
   const isVideo = mime.startsWith('video/');
-  const cap = isVideo ? POST_VID_MAX : POST_IMG_MAX;
-  if (f.buffer.length > cap) {
+  // A freshly converted HEIC can exceed 1 MB (the client couldn't pre-shrink it),
+  // so allow converted images up to the video ceiling; direct images stay ≤ 1 MB.
+  const cap = isVideo ? POST_VID_MAX : (converted ? POST_VID_MAX : POST_IMG_MAX);
+  if (buf.length > cap) {
     return res.status(413).json({ error: isVideo ? 'Video too large (max 5 MB)' : 'Image too large (max 1 MB)' });
   }
   const key = `posts/${req.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
   let url;
   try {
     if (storage.enabled()) {
-      url = await storage.uploadFile(key, f.buffer, mime);
+      url = await storage.uploadFile(key, buf, mime);
     } else {
       const uploads = path.join(__dirname, 'public', 'uploads');
       if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
       const local = key.replace(/\//g, '_');
-      fs.writeFileSync(path.join(uploads, local), f.buffer);
+      fs.writeFileSync(path.join(uploads, local), buf);
       url = `/uploads/${local}`;
     }
   } catch (e) {
     return res.status(500).json({ error: 'Upload failed' });
   }
-  res.json({ url, media_type: isVideo ? 'video' : 'image', size: f.buffer.length });
+  res.json({ url, media_type: isVideo ? 'video' : 'image', size: buf.length });
 }));
 // Aggregate raw reaction rows ([{emoji,user_id}, …]) into a compact list the
 // client can render directly: [{emoji, count, user_ids:[…]}], newest-emoji last.
@@ -3228,19 +3254,17 @@ app.post('/api/ai/interview/score', authRequired, aiLimiter, wrap(async (req, re
   } catch (e) { sendAIError(res, e); }
 }));
 
-// --- 5. Network TL;DR (on-demand, cached, regenerated when stale) ---
-const FEED_SUMMARY_TTL = 6 * 60 * 60 * 1000; // 6h
+// --- 5. Network Highlights (regenerated on every load; cache is a fallback) ---
 app.get('/api/ai/feed-summary', authRequired, wrap(async (req, res) => {
   if (!ai.aiEnabled()) return res.json({ highlights: [], enabled: false });
-  // Serve a fresh cached set if we have one (stored as a JSON highlights array).
+  // Load the last stored set to use as a fallback if generation fails (quota,
+  // transient error) so the card doesn't vanish on a hiccup.
+  let fallback = [];
   try {
-    const cached = await q(`SELECT summary, post_count, created_at FROM feed_summaries WHERE user_id = $1`, [req.user.id]);
-    if (cached.rowCount && (Date.now() - Number(cached.rows[0].created_at) < FEED_SUMMARY_TTL)) {
-      let hl = null;
-      try { hl = JSON.parse(cached.rows[0].summary); } catch (e) {}
-      if (Array.isArray(hl) && hl.length) {
-        return res.json({ highlights: hl, post_count: cached.rows[0].post_count, cached: true });
-      }
+    const cached = await q(`SELECT summary FROM feed_summaries WHERE user_id = $1`, [req.user.id]);
+    if (cached.rowCount) {
+      const hl = JSON.parse(cached.rows[0].summary);
+      if (Array.isArray(hl)) fallback = hl;
     }
   } catch (e) {}
   // Pull more candidates so highlights can cover several different people.
@@ -3279,7 +3303,10 @@ app.get('/api/ai/feed-summary', authRequired, wrap(async (req, res) => {
       });
       if (highlights.length >= 6) break;
     }
-    if (!highlights.length) return res.json({ highlights: [], post_count: recent.length, reason: 'not_enough' });
+    if (!highlights.length) {
+      if (fallback.length) return res.json({ highlights: fallback, post_count: recent.length, cached: true });
+      return res.json({ highlights: [], post_count: recent.length, reason: 'not_enough' });
+    }
     await q(
       `INSERT INTO feed_summaries (user_id, summary, post_count, seen, created_at)
        VALUES ($1,$2,$3,0,$4)
@@ -3287,7 +3314,11 @@ app.get('/api/ai/feed-summary', authRequired, wrap(async (req, res) => {
       [req.user.id, JSON.stringify(highlights), recent.length, Date.now()]
     ).catch(() => {});
     res.json({ highlights, post_count: recent.length, cached: false });
-  } catch (e) { sendAIError(res, e); }
+  } catch (e) {
+    // On failure (e.g. AI quota), serve the last good set instead of an error.
+    if (fallback.length) return res.json({ highlights: fallback, post_count: recent.length, cached: true, stale: true });
+    sendAIError(res, e);
+  }
 }));
 
 // --- 9. B2B Lead Scorer (premium dashboard + background classifier) ---

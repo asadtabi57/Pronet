@@ -55,30 +55,105 @@
   mediaFile.onchange = async () => {
     const file = mediaFile.files && mediaFile.files[0];
     if (!file) return;
-    const isVideo = file.type.startsWith('video/');
-    const isImage = file.type.startsWith('image/');
-    if (!isVideo && !isImage) { toast('Only image or video files are allowed'); mediaFile.value = ''; return; }
-    const cap = isVideo ? VID_MAX : IMG_MAX;
-    if (file.size > cap) {
-      toast(isVideo ? 'Video too large (max 5 MB)' : 'Image too large (max 1 MB)');
-      mediaFile.value = '';
+    const kind = fileKind(file);
+    if (!kind) { toast('Only image or video files are allowed'); mediaFile.value = ''; return; }
+
+    if (kind === 'video') {
+      if (file.size > VID_MAX) { toast('Video too large (max 5 MB)'); mediaFile.value = ''; return; }
+      await doUpload(file, 'video', file.name || 'video');
       return;
     }
+
+    // Image: downscale + re-encode to JPEG in the browser. This shrinks big phone
+    // photos to a few hundred KB and converts iPhone HEIC to JPEG (WebKit decodes
+    // HEIC natively). If the browser can't decode it, fall back to raw upload and
+    // let the server convert (server-side HEIC→JPEG).
+    mediaPreview.hidden = false;
+    mediaPreview.innerHTML = '<span class="media-uploading">Processing…</span>';
+    let blob = null;
+    try { blob = await processImage(file); } catch (e) { blob = null; }
+    if (blob) {
+      await doUpload(blob, 'image', 'photo.jpg');
+    } else {
+      if (file.size > VID_MAX) { toast('Image too large'); clearUpload(); return; }
+      await doUpload(file, 'image', file.name || 'photo');
+    }
+  };
+
+  async function doUpload(fileOrBlob, kind, name) {
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', fileOrBlob, name || 'upload');
     mediaPreview.hidden = false;
     mediaPreview.innerHTML = '<span class="media-uploading">Uploading…</span>';
     try {
       const r = await api('/api/posts/media', { method: 'POST', body: fd });
       if (!r || !r.url) throw new Error('Upload failed');
-      uploaded = { url: r.url, type: r.media_type || (isVideo ? 'video' : 'image') };
+      uploaded = { url: r.url, type: r.media_type || kind };
       mediaUrl.value = '';
       showPreview(uploaded);
     } catch (e) {
       clearUpload();
       toast((e && e.message) || 'Upload failed');
     }
-  };
+  }
+
+  function fileKind(file) {
+    const t = String(file.type || '').toLowerCase();
+    if (t.startsWith('video/')) return 'video';
+    if (t.startsWith('image/')) return 'image';
+    const n = String(file.name || '').toLowerCase();
+    if (/\.(mp4|webm|ogv|mov|m4v)$/.test(n)) return 'video';
+    if (/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/.test(n)) return 'image';
+    return '';
+  }
+
+  // Decode → draw to a canvas (max 1600px) → JPEG blob ≤ 1 MB. Returns null if the
+  // image can't be decoded by this browser (e.g. HEIC on a non-Apple engine).
+  async function processImage(file) {
+    let drawable = null, width = 0, height = 0, cleanup = null;
+    try {
+      if (window.createImageBitmap) {
+        const bmp = await createImageBitmap(file);
+        drawable = bmp; width = bmp.width; height = bmp.height;
+        cleanup = () => { try { bmp.close && bmp.close(); } catch (e) {} };
+      }
+    } catch (e) { drawable = null; }
+    if (!drawable) {
+      const url = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = () => rej(new Error('decode'));
+          im.src = url;
+        });
+        drawable = img; width = img.naturalWidth; height = img.naturalHeight;
+        cleanup = () => URL.revokeObjectURL(url);
+      } catch (e) { URL.revokeObjectURL(url); return null; }
+    }
+    if (!width || !height) { if (cleanup) cleanup(); return null; }
+
+    const MAXD = 1600;
+    let scale = Math.min(1, MAXD / Math.max(width, height));
+    let w = Math.max(1, Math.round(width * scale));
+    let h = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const draw = () => { canvas.width = w; canvas.height = h; ctx.drawImage(drawable, 0, 0, w, h); };
+    draw();
+
+    let quality = 0.85;
+    let blob = null;
+    for (let i = 0; i < 7; i++) {
+      blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', quality));
+      if (!blob) break;
+      if (blob.size <= IMG_MAX) break;
+      if (quality > 0.5) { quality -= 0.15; }
+      else { w = Math.round(w * 0.85); h = Math.round(h * 0.85); draw(); }
+    }
+    if (cleanup) cleanup();
+    return blob || null;
+  }
 
   document.getElementById('post-btn').onclick = async () => {
     const content = ta.value.trim();
