@@ -27,17 +27,70 @@
   const mediaInput = document.getElementById('media-input');
   const mediaType = document.getElementById('media-type');
   const mediaUrl = document.getElementById('media-url');
+  const mediaFile = document.getElementById('media-file');
+  const mediaPreview = document.getElementById('media-preview');
   document.getElementById('toggle-media').onclick = () => mediaInput.classList.toggle('active');
+
+  // Uploaded media (small files → Supabase storage). Holds {url, type} once a file
+  // is uploaded; takes priority over a pasted URL when posting.
+  const IMG_MAX = 1 * 1024 * 1024;   // 1 MB
+  const VID_MAX = 5 * 1024 * 1024;   // 5 MB
+  let uploaded = null;
+
+  function clearUpload() {
+    uploaded = null;
+    mediaFile.value = '';
+    mediaPreview.hidden = true;
+    mediaPreview.innerHTML = '';
+  }
+  function showPreview(up) {
+    mediaPreview.hidden = false;
+    const media = up.type === 'video'
+      ? `<video src="${escapeHTML(up.url)}" controls preload="metadata"></video>`
+      : `<img src="${escapeHTML(up.url)}" alt=""/>`;
+    mediaPreview.innerHTML = `${media}<button type="button" class="media-preview-x" aria-label="Remove">×</button>`;
+    mediaPreview.querySelector('.media-preview-x').onclick = clearUpload;
+  }
+
+  mediaFile.onchange = async () => {
+    const file = mediaFile.files && mediaFile.files[0];
+    if (!file) return;
+    const isVideo = file.type.startsWith('video/');
+    const isImage = file.type.startsWith('image/');
+    if (!isVideo && !isImage) { toast('Only image or video files are allowed'); mediaFile.value = ''; return; }
+    const cap = isVideo ? VID_MAX : IMG_MAX;
+    if (file.size > cap) {
+      toast(isVideo ? 'Video too large (max 5 MB)' : 'Image too large (max 1 MB)');
+      mediaFile.value = '';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    mediaPreview.hidden = false;
+    mediaPreview.innerHTML = '<span class="media-uploading">Uploading…</span>';
+    try {
+      const r = await api('/api/posts/media', { method: 'POST', body: fd });
+      if (!r || !r.url) throw new Error('Upload failed');
+      uploaded = { url: r.url, type: r.media_type || (isVideo ? 'video' : 'image') };
+      mediaUrl.value = '';
+      showPreview(uploaded);
+    } catch (e) {
+      clearUpload();
+      toast((e && e.message) || 'Upload failed');
+    }
+  };
+
   document.getElementById('post-btn').onclick = async () => {
     const content = ta.value.trim();
     const url = mediaUrl.value.trim();
-    if (!content && !url) { toast('Write something or add media'); return; }
+    const media_url = uploaded ? uploaded.url : (url || null);
+    const media_type = uploaded ? uploaded.type : (url ? mediaType.value : null);
+    if (!content && !media_url) { toast('Write something or add media'); return; }
     // Tone Guardian: gentle pre-send check (no-op if AI is unavailable).
     if (content && window.AI && !(await AI.tonePrecheck(content))) return;
-    await api('/api/posts', { method: 'POST', body: {
-      content, media_type: url ? mediaType.value : null, media_url: url || null,
-    }});
+    await api('/api/posts', { method: 'POST', body: { content, media_type, media_url } });
     ta.value = ''; mediaUrl.value = ''; mediaInput.classList.remove('active');
+    clearUpload();
     loadPosts();
   };
 
@@ -104,21 +157,50 @@
     textEl.addEventListener('input', () => { textEl.style.height = 'auto'; textEl.style.height = Math.min(textEl.scrollHeight, 320) + 'px'; });
   }
 
-  // Network TL;DR digest card (shows only when AI is enabled & there's enough activity).
+  // Network Highlights card — short AI highlights of important posts, each tied
+  // to its author; clicking one jumps to that post in the feed.
   (async () => {
     if (!window.AI || !(await AI.feature('feed_summary'))) return;
     try {
       const r = await api('/api/ai/feed-summary');
-      if (!r || !r.summary) return;
+      const highlights = (r && Array.isArray(r.highlights)) ? r.highlights : [];
+      if (!highlights.length) return;
       const box = document.getElementById('ai-digest');
       if (!box) return;
       box.innerHTML = `<div class="card ai-digest-card">
-        <div class="ai-digest-head">${AI.SPARKLE} <span>Your network TL;DR</span><button class="ai-digest-x" aria-label="Dismiss">×</button></div>
-        <div class="ai-digest-body">${escapeHTML(r.summary).replace(/\n/g, '<br>')}</div>
+        <div class="ai-digest-head">${AI.SPARKLE} <span>Highlights</span><button class="ai-digest-x" aria-label="Dismiss">×</button></div>
+        <div class="ai-hl-list">
+          ${highlights.map(h => `
+            <button class="ai-hl" data-post="${h.post_id}">
+              ${avatar({ id: h.author.id, name: h.author.name, avatar_color: h.author.avatar_color, avatar_url: h.author.avatar_url }, 'sm')}
+              <span class="ai-hl-body">
+                <span class="ai-hl-name">${escapeHTML(h.author.name || '')}</span>
+                <span class="ai-hl-text">${escapeHTML(h.text)}</span>
+              </span>
+            </button>`).join('')}
+        </div>
       </div>`;
       box.querySelector('.ai-digest-x').onclick = () => { box.innerHTML = ''; };
+      box.querySelectorAll('.ai-hl').forEach(btn => {
+        btn.addEventListener('click', () => goToPost(+btn.dataset.post));
+      });
     } catch (e) {}
   })();
+
+  // Scroll to a post in the feed and flash it. If it isn't loaded yet, retry a few
+  // times as the feed fills in.
+  function goToPost(id, tries = 0) {
+    const el = document.getElementById('post-' + id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('post-flash');
+      void el.offsetWidth;
+      el.classList.add('post-flash');
+      setTimeout(() => el.classList.remove('post-flash'), 1800);
+      return;
+    }
+    if (tries < 8) setTimeout(() => goToPost(id, tries + 1), 250);
+  }
 
   const postsEl = document.getElementById('posts');
 

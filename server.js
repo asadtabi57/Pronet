@@ -2313,6 +2313,55 @@ async function storeChatAttachment(att, fromId, toId) {
   if (!m) throw { status: 400, message: 'Invalid attachment' };
   return storeChatBuffer(Buffer.from(m[2], 'base64'), m[1], att.name, fromId, toId);
 }
+
+// ---- Post media upload (images ≤ 1 MB, videos ≤ 5 MB) → Supabase Storage ----
+const POST_IMG_MAX = 1 * 1024 * 1024;  // 1 MB
+const POST_VID_MAX = 5 * 1024 * 1024;  // 5 MB
+const POST_MEDIA_EXT = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv', 'video/quicktime': 'mov',
+};
+const postMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: POST_VID_MAX, files: 1 },
+});
+function uploadPostMedia(req, res, next) {
+  postMediaUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Video too large (max 5 MB)' });
+      return res.status(400).json({ error: 'Upload failed' });
+    }
+    next();
+  });
+}
+app.post('/api/posts/media', authRequired, uploadPostMedia, wrap(async (req, res) => {
+  const f = req.file;
+  if (!f || !f.buffer || !f.buffer.length) return res.status(400).json({ error: 'No file' });
+  const mime = String(f.mimetype || '').toLowerCase();
+  const ext = POST_MEDIA_EXT[mime];
+  if (!ext) return res.status(415).json({ error: 'Only image or video files are allowed' });
+  const isVideo = mime.startsWith('video/');
+  const cap = isVideo ? POST_VID_MAX : POST_IMG_MAX;
+  if (f.buffer.length > cap) {
+    return res.status(413).json({ error: isVideo ? 'Video too large (max 5 MB)' : 'Image too large (max 1 MB)' });
+  }
+  const key = `posts/${req.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  let url;
+  try {
+    if (storage.enabled()) {
+      url = await storage.uploadFile(key, f.buffer, mime);
+    } else {
+      const uploads = path.join(__dirname, 'public', 'uploads');
+      if (!fs.existsSync(uploads)) fs.mkdirSync(uploads, { recursive: true });
+      const local = key.replace(/\//g, '_');
+      fs.writeFileSync(path.join(uploads, local), f.buffer);
+      url = `/uploads/${local}`;
+    }
+  } catch (e) {
+    return res.status(500).json({ error: 'Upload failed' });
+  }
+  res.json({ url, media_type: isVideo ? 'video' : 'image', size: f.buffer.length });
+}));
 // Aggregate raw reaction rows ([{emoji,user_id}, …]) into a compact list the
 // client can render directly: [{emoji, count, user_ids:[…]}], newest-emoji last.
 function reactionsDTO(rows) {
@@ -3182,31 +3231,62 @@ app.post('/api/ai/interview/score', authRequired, aiLimiter, wrap(async (req, re
 // --- 5. Network TL;DR (on-demand, cached, regenerated when stale) ---
 const FEED_SUMMARY_TTL = 6 * 60 * 60 * 1000; // 6h
 app.get('/api/ai/feed-summary', authRequired, wrap(async (req, res) => {
-  if (!ai.aiEnabled()) return res.json({ summary: null, enabled: false });
+  if (!ai.aiEnabled()) return res.json({ highlights: [], enabled: false });
+  // Serve a fresh cached set if we have one (stored as a JSON highlights array).
   try {
     const cached = await q(`SELECT summary, post_count, created_at FROM feed_summaries WHERE user_id = $1`, [req.user.id]);
     if (cached.rowCount && (Date.now() - Number(cached.rows[0].created_at) < FEED_SUMMARY_TTL)) {
-      return res.json({ summary: cached.rows[0].summary, post_count: cached.rows[0].post_count, cached: true });
+      let hl = null;
+      try { hl = JSON.parse(cached.rows[0].summary); } catch (e) {}
+      if (Array.isArray(hl) && hl.length) {
+        return res.json({ highlights: hl, post_count: cached.rows[0].post_count, cached: true });
+      }
     }
   } catch (e) {}
-  // Pull the viewer's recent network posts.
+  // Pull more candidates so highlights can cover several different people.
   let posts = [];
   try {
-    posts = await fetchPostDTOs({ viewerId: req.user.id, where: VISIBLE_AUTHOR_WHERE, limit: 12 });
+    posts = await fetchPostDTOs({ viewerId: req.user.id, where: VISIBLE_AUTHOR_WHERE, limit: 24 });
   } catch (e) {}
-  const recent = posts.filter(p => Date.now() - p.created_at < 3 * 24 * 60 * 60 * 1000).slice(0, 10);
-  if (recent.length < 2) return res.json({ summary: null, post_count: recent.length, reason: 'not_enough' });
-  const lines = recent.map(p => `- ${p.name}: ${String(p.content || '').replace(/\s+/g, ' ').slice(0, 200)}`).join('\n');
-  const system = 'You summarize a professional network feed into a crisp digest. Output 3 bullet points, each starting with "• ", each under 20 words. No preamble.';
+  const recent = posts
+    .filter(p => Date.now() - p.created_at < 3 * 24 * 60 * 60 * 1000)
+    .filter(p => String(p.content || '').trim().length > 0)
+    .slice(0, 14);
+  if (recent.length < 2) return res.json({ highlights: [], post_count: recent.length, reason: 'not_enough' });
+  const lines = recent.map((p, i) => `[${i}] ${p.name}: ${String(p.content || '').replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
+  const prompt =
+    `Below are recent posts from a professional network feed. Each line is "[index] Author: text".\n` +
+    `Pick the most interesting or important posts (up to 6, fewer if there isn't enough substance) and write ONE short highlight for each — under 16 words, capturing the key takeaway in a natural voice. ` +
+    `Skip trivial, empty or near-duplicate posts, and cover different authors when possible.\n` +
+    `Return JSON: {"highlights":[{"i": <index>, "text": "<highlight>"}]}, ordered by importance.\n\nPOSTS:\n${lines}`;
   try {
-    const summary = await ai.generateText(`Summarize what's happening in my network:\n\n${lines}`, { system, maxTokens: 200, temperature: 0.6 });
+    const data = await ai.generateJSON(prompt, { maxTokens: 400, temperature: 0.5 });
+    const arr = (data && Array.isArray(data.highlights)) ? data.highlights : [];
+    const seen = new Set();
+    const highlights = [];
+    for (const h of arr) {
+      const idx = Number(h && h.i);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= recent.length) continue;
+      const p = recent[idx];
+      if (seen.has(p.id)) continue;
+      const text = String((h && h.text) || '').trim();
+      if (!text) continue;
+      seen.add(p.id);
+      highlights.push({
+        post_id: p.id,
+        text: text.slice(0, 160),
+        author: { id: p.user_id, name: p.name, avatar_color: p.avatar_color || null, avatar_url: p.avatar_url || null },
+      });
+      if (highlights.length >= 6) break;
+    }
+    if (!highlights.length) return res.json({ highlights: [], post_count: recent.length, reason: 'not_enough' });
     await q(
       `INSERT INTO feed_summaries (user_id, summary, post_count, seen, created_at)
        VALUES ($1,$2,$3,0,$4)
        ON CONFLICT (user_id) DO UPDATE SET summary=EXCLUDED.summary, post_count=EXCLUDED.post_count, seen=0, created_at=EXCLUDED.created_at`,
-      [req.user.id, summary.trim(), recent.length, Date.now()]
+      [req.user.id, JSON.stringify(highlights), recent.length, Date.now()]
     ).catch(() => {});
-    res.json({ summary: summary.trim(), post_count: recent.length, cached: false });
+    res.json({ highlights, post_count: recent.length, cached: false });
   } catch (e) { sendAIError(res, e); }
 }));
 
