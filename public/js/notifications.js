@@ -36,7 +36,11 @@
 
   async function render() {
     const { notifications } = await api('/api/notifications');
-    if (!notifications.length) { el.innerHTML = '<p class="empty">No notifications yet.</p>'; return; }
+    if (!notifications.length) {
+      el.innerHTML = '<p class="empty">No notifications yet.</p>';
+      updateClearBtn(0);
+      return;
+    }
 
     el.innerHTML = notifications.map(n => {
       const a = n.actor || { name: 'Someone', avatar_color: '#888' };
@@ -60,6 +64,7 @@
           ${actions}
         </div>`;
     }).join('');
+    updateClearBtn(notifications.length);
 
     el.querySelectorAll('.notif-actions').forEach(box => {
       const id = box.dataset.actor;
@@ -76,6 +81,35 @@
     });
 
     await api('/api/notifications/read', { method: 'POST' });
+  }
+
+  // Header toolbar: enable-notifications toggle + Clear all.
+  const toolbar = document.getElementById('notif-toolbar');
+  function updateClearBtn(count) {
+    const btn = document.getElementById('clear-all-btn');
+    if (btn) btn.disabled = count === 0;
+  }
+  if (toolbar) {
+    toolbar.innerHTML = `
+      <button class="btn-tiny ghost" id="notif-enable-btn" hidden>🔔 Turn on alerts</button>
+      <button class="btn-tiny ghost" id="clear-all-btn">Clear all</button>`;
+    const clearBtn = document.getElementById('clear-all-btn');
+    clearBtn.onclick = async () => {
+      if (!(await confirmDialog({ title: 'Clear all notifications?', message: 'This removes all your notifications.', confirmText: 'Clear all' }))) return;
+      try {
+        await api('/api/notifications', { method: 'DELETE' });
+        el.innerHTML = '<p class="empty">No notifications yet.</p>';
+        updateClearBtn(0);
+        if (window.refreshNavBadges) window.refreshNavBadges();
+        toast('Notifications cleared');
+      } catch (e) { toast(e.message || 'Could not clear'); }
+    };
+    // Wire the "enable push" button if the push helper is present.
+    const enableBtn = document.getElementById('notif-enable-btn');
+    if (enableBtn && window.PronetPush) {
+      window.PronetPush.reflectButton(enableBtn);
+      enableBtn.onclick = () => window.PronetPush.enable(enableBtn);
+    }
   }
 
   // Live updates: re-render when a new notification arrives in real time.

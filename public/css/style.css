@@ -2987,3 +2987,8 @@ body.app {
 @media (min-width: 769px) {
   body.mobile-shell .m-topbar, body.mobile-shell .m-tabbar { display: none !important; }
 }
+
+/* Notifications header toolbar */
+.notif-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.notif-toolbar { display: flex; gap: 8px; align-items: center; }
+.notif-toolbar .btn-tiny[disabled] { opacity: .45; cursor: default; }

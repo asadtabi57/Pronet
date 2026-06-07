@@ -307,22 +307,53 @@ async function notify(userId, type, actorId, payload) {
      VALUES ($1,$2,$3,$4::jsonb,0,$5) RETURNING id, created_at`,
     [userId, type, actorId, JSON.stringify(payload || {}), Date.now()]
   );
-  // Realtime push is best-effort and only matters if the user is connected, so
-  // build the actor DTO and emit it without blocking the caller's response.
+  // Fan out live (SSE) + OS push without blocking the caller. We build the actor
+  // DTO once and reuse it for both. Push fires even when the user has no live
+  // SSE connection (app closed) — that's the whole point of web push.
   (async () => {
     try {
-      if (!sseClients.has(Number(userId))) return; // nobody listening; skip the lookups
+      const listening = sseClients.has(Number(userId));
+      if (!listening && !push.enabled()) return; // nothing to deliver
       let actor = null;
       if (actorId) actor = await publicUser(await findUser(Number(actorId)), Number(userId));
-      sseSend(userId, 'notification', {
-        id: Number(ins.rows[0].id),
-        type, actor_id: actorId ? Number(actorId) : null,
-        payload: payload || {}, read: 0,
-        created_at: Number(ins.rows[0].created_at),
-        actor,
-      });
-    } catch (e) { /* realtime is best-effort */ }
+      if (listening) {
+        sseSend(userId, 'notification', {
+          id: Number(ins.rows[0].id),
+          type, actor_id: actorId ? Number(actorId) : null,
+          payload: payload || {}, read: 0,
+          created_at: Number(ins.rows[0].created_at),
+          actor,
+        });
+      }
+      // OS-level push notification.
+      const pc = pushContentFor(type, actor, payload);
+      if (pc) push.sendToUser(Number(userId), pc).catch(() => {});
+    } catch (e) { /* best-effort */ }
   })();
+}
+
+// Map a notification type to a phone-friendly push payload.
+function pushContentFor(type, actor, payload) {
+  const name = (actor && actor.name) || 'Someone';
+  payload = payload || {};
+  const post = payload.post_id ? `/feed.html#post-${payload.post_id}` : '/feed.html';
+  const map = {
+    message:            { body: 'sent you a message', url: actor ? `/messages.html?user=${actor.id}` : '/messages.html' },
+    reaction:           { body: 'reacted to your message', url: actor ? `/messages.html?user=${actor.id}` : '/messages.html' },
+    like:               { body: 'reacted to your post', url: post },
+    comment:            { body: 'commented on your post', url: post },
+    repost:             { body: 'reposted your post', url: post },
+    share:              { body: 'shared your post', url: post },
+    new_post:           { body: 'shared a new post', url: post },
+    connection_request: { body: 'wants to connect with you', url: actor ? `/profile.html?id=${actor.id}` : '/network.html' },
+    connect_accepted:   { body: 'accepted your connection request', url: actor ? `/profile.html?id=${actor.id}` : '/network.html' },
+    connect:            { body: 'connected with you', url: actor ? `/profile.html?id=${actor.id}` : '/network.html' },
+    endorsement:        { body: 'endorsed a skill on your profile', url: actor ? `/profile.html?id=${actor.id}` : '/notifications.html' },
+    profile_view:       { body: 'viewed your profile', url: actor ? `/profile.html?id=${actor.id}` : '/notifications.html' },
+  };
+  const m = map[type];
+  if (!m) return null;
+  return { title: name, body: m.body, url: m.url, tag: type + ':' + (actor ? actor.id : '') };
 }
 
 // ---------------- Realtime (SSE) hub ----------------
@@ -551,7 +582,7 @@ const htmlCache = new Map();
 // self-disables on pages without #top-nav (landing/auth), so this is safe to
 // add globally.
 const PWA_HEAD = `\n  <link rel="manifest" href="/manifest.webmanifest" />\n  <meta name="theme-color" content="#4f46e5" />\n  <meta name="mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-capable" content="yes" />\n  <meta name="apple-mobile-web-app-status-bar-style" content="default" />\n  <meta name="apple-mobile-web-app-title" content="Pronet" />\n  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />\n  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />\n`;
-const PWA_BODY = `\n  <script src="/js/pwa.js"></script>\n  <script src="/js/mobile.js"></script>\n`;
+const PWA_BODY = `\n  <script src="/js/pwa.js"></script>\n  <script src="/js/push.js"></script>\n  <script src="/js/mobile.js"></script>\n`;
 function serveVersionedHtml(req, res, next, fileName) {
   const filePath = path.join(__dirname, 'public', fileName || req.path);
   const cacheKey = filePath + ':' + BUILD_ID;
@@ -626,6 +657,8 @@ const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const mailer = require('./lib/mailer');
 const ai = require('./lib/ai');
+const push = require('./lib/push');
+push.init(q);
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -2070,6 +2103,14 @@ app.post('/api/calls', authRequired, wrap(async (req, res) => {
   );
   const dto = await callDTO(ins.rows[0], receiverId);
   sseSend(receiverId, 'call_invite', { call: dto });
+  // OS push for the incoming call (rings the phone even if the app is closed).
+  push.sendToUser(receiverId, {
+    title: req.user.name || 'Pronet',
+    body: callType === 'video' ? '📹 Incoming video call' : '📞 Incoming call',
+    url: `/messages.html?user=${req.user.id}`,
+    tag: 'call:' + req.user.id,
+    requireInteraction: true,
+  }).catch(() => {});
   res.json({ call: await callDTO(ins.rows[0], req.user.id) });
 }));
 
@@ -2573,6 +2614,28 @@ app.get('/api/notifications', authRequired, wrap(async (req, res) => {
 
 app.post('/api/notifications/read', authRequired, wrap(async (req, res) => {
   await q(`UPDATE notifications SET read = 1 WHERE user_id = $1 AND read = 0`, [req.user.id]);
+  res.json({ ok: true });
+}));
+
+// Clear all of the current user's notifications.
+app.delete('/api/notifications', authRequired, wrap(async (req, res) => {
+  const r = await q(`DELETE FROM notifications WHERE user_id = $1`, [req.user.id]);
+  res.json({ ok: true, deleted: r.rowCount });
+}));
+
+// --- Web Push (real-time OS notifications) ---
+app.get('/api/push/vapid-public-key', (req, res) => {
+  res.json({ key: push.enabled() ? push.publicKey() : null });
+});
+app.post('/api/push/subscribe', authRequired, wrap(async (req, res) => {
+  const sub = req.body && req.body.subscription;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: 'Invalid subscription' });
+  await push.saveSubscription(req.user.id, sub, req.headers['user-agent']);
+  res.json({ ok: true });
+}));
+app.post('/api/push/unsubscribe', authRequired, wrap(async (req, res) => {
+  const endpoint = req.body && req.body.endpoint;
+  if (endpoint) await push.removeSubscription(endpoint);
   res.json({ ok: true });
 }));
 

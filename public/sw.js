@@ -4,7 +4,7 @@
 //   • navigations    -> network-first, fall back to cached page, then offline.html
 //   • static assets  -> stale-while-revalidate (instant load, refresh in bg)
 //   • cross-origin   -> passthrough (CDNs, Gemini, Supabase handle themselves)
-const VERSION = 'pronet-v1';
+const VERSION = 'pronet-v2';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 
@@ -76,4 +76,40 @@ self.addEventListener('fetch', (event) => {
 // Allow the page to trigger an immediate activation after an update.
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// ---- Web Push: show OS notifications even when the app is closed ----
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data && event.data.text() }; }
+  const title = data.title || 'Pronet';
+  const options = {
+    body: data.body || '',
+    icon: data.icon || '/icons/icon-192.png',
+    badge: data.badge || '/icons/icon-192.png',
+    tag: data.tag || 'pronet',
+    renotify: true,
+    requireInteraction: !!data.requireInteraction,
+    data: { url: data.url || '/notifications.html' },
+    vibrate: [80, 40, 80],
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/notifications.html';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      // Focus an existing tab if one is open, else open a new one.
+      for (const client of clients) {
+        if ('focus' in client) {
+          client.focus();
+          if ('navigate' in client) client.navigate(url).catch(() => {});
+          return;
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
 });

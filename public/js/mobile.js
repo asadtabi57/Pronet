@@ -124,6 +124,8 @@
     const me = (typeof getMe === 'function' && getMe()) || {};
     const installItem = (window.__canInstallPWA && !window.isStandalonePWA?.())
       ? `<button class="m-menu-item" id="mm-install">${ICONS.download}<span>Install app</span></button>` : '';
+    const notifItem = (window.PronetPush && PronetPush.supported() && Notification.permission !== 'granted')
+      ? `<button class="m-menu-item" id="mm-notif">${ICONS.bell}<span>Turn on notifications</span></button>` : '';
     const sheet = makeSheet('me', `
       <div class="m-sheet-grab"></div>
       <a class="m-me-card" href="/profile.html?id=${me.id}">
@@ -139,10 +141,13 @@
         <a class="m-menu-item" href="/notifications.html">${ICONS.bell}<span>Notifications</span></a>
         <a class="m-menu-item" href="/lounge.html">${ICONS.sparkle}<span>Lounge &amp; AI tools</span></a>
         <a class="m-menu-item" href="/premium.html">${ICONS.star}<span>Premium</span></a>
+        ${notifItem}
         ${installItem}
         <button class="m-menu-item" id="mm-settings">${ICONS.gear}<span>Settings &amp; privacy</span></button>
         <button class="m-menu-item danger" id="mm-signout">${ICONS.logout}<span>Sign out</span></button>
       </div>`);
+    const notifBtn = sheet.el.querySelector('#mm-notif');
+    if (notifBtn) notifBtn.onclick = () => { window.PronetPush.enable(); sheet.close(); };
     const inst = sheet.el.querySelector('#mm-install');
     if (inst) inst.onclick = () => { sheet.close(); window.promptInstall && window.promptInstall(); };
     sheet.el.querySelector('#mm-settings').onclick = () => {
