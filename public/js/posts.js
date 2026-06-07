@@ -45,7 +45,12 @@ function renderPostInner(p) {
   } else if (p.media_type === 'video' && p.media_url) {
     if (/youtube\.com|youtu\.be/.test(p.media_url)) {
       const id = (p.media_url.match(/(?:v=|youtu\.be\/)([\w-]+)/) || [])[1];
-      media = `<div class="post-media"><iframe width="100%" height="400" src="https://www.youtube.com/embed/${id}" frameborder="0" allowfullscreen></iframe></div>`;
+      // Lightweight click-to-play facade: just a thumbnail until tapped, so the
+      // heavy YouTube player iframe is never loaded for off-screen feed posts.
+      media = `<div class="post-media yt-facade" data-yt="${escapeHTML(id || '')}">
+        <img src="https://i.ytimg.com/vi/${escapeHTML(id || '')}/hqdefault.jpg" alt="" loading="lazy"/>
+        <button type="button" class="yt-play" aria-label="Play video"></button>
+      </div>`;
     } else {
       media = `<div class="post-media"><video src="${escapeHTML(p.media_url)}" controls preload="metadata"></video></div>`;
     }
@@ -94,6 +99,15 @@ function renderPostInner(p) {
 
 function wirePost(el, p, opts = {}) {
   const id = p.id;
+  // Click-to-play YouTube facade → swap in the real player only on demand.
+  const fac = el.querySelector('.yt-facade');
+  if (fac) {
+    fac.addEventListener('click', () => {
+      const vid = fac.dataset.yt;
+      if (!vid) return;
+      fac.outerHTML = `<div class="post-media"><iframe width="100%" height="400" src="https://www.youtube.com/embed/${vid}?autoplay=1" frameborder="0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></div>`;
+    }, { once: true });
+  }
   const wrap = el.querySelector('.like-wrap');
   const likeBtn = el.querySelector('.like-btn');
 
