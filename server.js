@@ -645,6 +645,7 @@ function serveVersionedHtml(req, res, next, fileName) {
 // is loaded unversioned and gets the aggressive 7-day cache — which is exactly
 // why returning (non-incognito) browsers kept running stale app.js.
 app.get('/', (req, res, next) => serveVersionedHtml(req, res, next, 'index.html'));
+app.get('/install', (req, res, next) => serveVersionedHtml(req, res, next, 'install.html'));
 app.get(/\.html$/, (req, res, next) => serveVersionedHtml(req, res, next));
 
 // --- PWA endpoints (must precede express.static so we control caching/types) ---

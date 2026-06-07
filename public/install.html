@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Install Connectik</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    .inst-wrap {
+      min-height: 100dvh; box-sizing: border-box;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 28px 18px calc(28px + env(safe-area-inset-bottom));
+      background:
+        radial-gradient(80% 60% at 50% -10%, rgba(79,70,229,.18) 0%, transparent 60%),
+        var(--bg-app, #12161d);
+    }
+    .inst-card {
+      width: 100%; max-width: 440px; background: var(--card, #fff);
+      border: 1px solid var(--line, #e5e7eb); border-radius: 22px;
+      padding: 28px 24px; box-shadow: 0 18px 48px -12px rgba(0,0,0,.35);
+      text-align: center;
+    }
+    .inst-logo { width: 84px; height: 84px; margin: 0 auto 14px; }
+    .inst-logo svg { width: 100%; height: 100%; display: block; }
+    .inst-card h1 { margin: 0 0 4px; font-size: 26px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
+    .inst-tag { margin: 0 0 20px; font-size: 14px; color: var(--muted); }
+    .inst-btn {
+      width: 100%; padding: 14px; border: none; border-radius: 999px;
+      background: var(--brand, #4f46e5); color: #fff; font-size: 16px; font-weight: 700;
+      cursor: pointer; transition: filter .15s ease;
+    }
+    .inst-btn:hover { filter: brightness(1.08); }
+    .inst-btn.secondary {
+      background: transparent; color: var(--brand, #4f46e5);
+      border: 1px solid var(--line, #e5e7eb); margin-top: 10px;
+    }
+    .inst-steps {
+      text-align: left; margin: 6px auto 4px; padding: 0; list-style: none;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .inst-steps li { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; color: var(--ink-2, #374151); line-height: 1.45; }
+    .inst-steps .n {
+      flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+      background: var(--brand-soft, #eef2ff); color: var(--brand, #4f46e5);
+      display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px;
+    }
+    .inst-ico { display: inline-flex; vertical-align: middle; color: var(--brand, #4f46e5); margin: 0 2px; }
+    .inst-platform-title { font-weight: 700; color: var(--ink); margin: 4px 0 14px; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .inst-note { margin-top: 16px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+    .inst-hide { display: none !important; }
+    .inst-ok-badge {
+      display: inline-flex; align-items: center; gap: 8px; margin: 10px 0 4px;
+      padding: 8px 14px; border-radius: 999px; background: #dcfce7; color: #166534; font-weight: 700; font-size: 14px;
+    }
+    [data-theme="dark"] .inst-ok-badge { background: #13241b; color: #6ee7a8; }
+  </style>
+</head>
+<body>
+  <div class="inst-wrap">
+    <div class="inst-card">
+      <div class="inst-logo">
+        <svg viewBox="0 0 512 512" aria-hidden="true">
+          <defs>
+            <linearGradient id="instMint" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#34d399" />
+              <stop offset="100%" stop-color="#059669" />
+            </linearGradient>
+          </defs>
+          <rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5" />
+          <rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32" />
+          <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#instMint)" stroke-width="32" />
+          <circle cx="256" cy="256" r="14" fill="#ffffff" />
+        </svg>
+      </div>
+      <h1>Connectik</h1>
+      <p class="inst-tag">Connect, collaborate &amp; grow — install the app to your home screen.</p>
+
+      <!-- Already installed -->
+      <div id="inst-installed" class="inst-hide">
+        <div class="inst-ok-badge">✓ You're all set</div>
+        <p class="inst-tag">Connectik is already installed on this device.</p>
+        <a class="inst-btn" href="/feed.html">Open Connectik</a>
+      </div>
+
+      <!-- Android / Desktop (Chromium) -->
+      <div id="inst-android" class="inst-hide">
+        <div class="inst-platform-title">📱 Install on Android</div>
+        <button id="inst-install-btn" class="inst-btn">Install app</button>
+        <ol class="inst-steps" id="inst-android-steps" style="margin-top:16px;">
+          <li><span class="n">1</span><span>Tap the menu <strong>⋮</strong> in the top-right of Chrome</span></li>
+          <li><span class="n">2</span><span>Choose <strong>Install app</strong> (or <strong>Add to Home screen</strong>)</span></li>
+          <li><span class="n">3</span><span>Tap <strong>Install</strong> — Connectik appears on your home screen</span></li>
+        </ol>
+      </div>
+
+      <!-- iOS -->
+      <div id="inst-ios" class="inst-hide">
+        <div class="inst-platform-title">🍎 Install on iPhone / iPad</div>
+        <ol class="inst-steps">
+          <li><span class="n">1</span><span>Open this page in <strong>Safari</strong> (Chrome works on iOS 16.4+)</span></li>
+          <li><span class="n">2</span><span>Tap the <strong>Share</strong> icon
+            <span class="inst-ico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M8 8l4-4 4 4"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg></span>
+            (bottom of Safari)</span></li>
+          <li><span class="n">3</span><span>Scroll down → tap <strong>Add to Home Screen</strong></span></li>
+          <li><span class="n">4</span><span>Tap <strong>Add</strong> — done!</span></li>
+        </ol>
+      </div>
+
+      <!-- Desktop fallback -->
+      <div id="inst-desktop" class="inst-hide">
+        <div class="inst-platform-title">💻 Install on desktop</div>
+        <button id="inst-install-btn-desk" class="inst-btn">Install app</button>
+        <ol class="inst-steps" style="margin-top:16px;">
+          <li><span class="n">1</span><span>In Chrome or Edge, click the <strong>install icon</strong> in the address bar</span></li>
+          <li><span class="n">2</span><span>Click <strong>Install</strong></span></li>
+        </ol>
+      </div>
+
+      <a class="inst-btn secondary" href="/feed.html">Just open it in the browser →</a>
+      <p class="inst-note">Connectik is a web app (PWA) — no app store needed. Works on Android, iPhone, and desktop. On iOS 16.4+, install to your home screen to receive notifications.</p>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var ua = navigator.userAgent || '';
+      var isIOS = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      var isAndroid = /android/i.test(ua);
+      var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+      function show(id) { var el = document.getElementById(id); if (el) el.classList.remove('inst-hide'); }
+
+      if (standalone) {
+        show('inst-installed');
+      } else if (isIOS) {
+        show('inst-ios');
+      } else if (isAndroid) {
+        show('inst-android');
+      } else {
+        show('inst-desktop');
+      }
+
+      // Wire the Install buttons to the native PWA prompt provided by pwa.js
+      // (which loads just after this script). beforeinstallprompt may fire late,
+      // so we just call promptInstall() on click and let it guide if unavailable.
+      function wireInstall(btnId) {
+        var btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          if (typeof window.promptInstall === 'function') {
+            window.promptInstall();
+          } else {
+            alert('Use your browser menu → "Install app" or "Add to Home screen".');
+          }
+        });
+      }
+      wireInstall('inst-install-btn');
+      wireInstall('inst-install-btn-desk');
+
+      // Reflect successful install.
+      window.addEventListener('appinstalled', function () {
+        ['inst-android', 'inst-ios', 'inst-desktop'].forEach(function (id) {
+          var el = document.getElementById(id); if (el) el.classList.add('inst-hide');
+        });
+        show('inst-installed');
+      });
+    })();
+  </script>
+</body>
+</html>

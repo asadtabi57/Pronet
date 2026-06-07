@@ -124,7 +124,7 @@
       if (window.isStandalonePWA && window.isStandalonePWA()) return;
       if (localStorage.getItem('connectik_ios_hint') === '1') return;
       const p = location.pathname;
-      if (p === '/' || /\/(index|signup|verify-email)\.html$/.test(p)) return; // skip public pages
+      if (p === '/' || /\/(index|signup|verify-email|install)\.html$/.test(p)) return; // skip public pages
       setTimeout(showIOSInstallHint, 2500);
     } catch (e) {}
   }
