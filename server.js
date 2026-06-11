@@ -356,6 +356,8 @@ function pushContentFor(type, actor, payload) {
     reaction:           { body: 'reacted to your message', url: actor ? `/messages.html?user=${actor.id}` : '/messages.html' },
     like:               { body: 'reacted to your post', url: post },
     comment:            { body: 'commented on your post', url: post },
+    comment_like:       { body: 'liked your comment', url: post },
+    reply:              { body: 'replied to your comment', url: post },
     repost:             { body: 'reposted your post', url: post },
     share:              { body: 'shared your post', url: post },
     new_post:           { body: 'shared a new post', url: post },
@@ -1550,21 +1552,60 @@ app.delete('/api/me/cover', authRequired, wrap(async (req, res) => {
   res.json({ user: await publicUser(fresh, fresh.id) });
 }));
 
-// --- AI: complete my profile (drafts about + headline + skills from notes) ---
+// --- AI: complete my profile (drafts EVERY profile section from notes) ---
+// Returns content for all tabs (headline, about, skills, experience, education,
+// languages, interests, open-to-work roles) inferred from the user's notes +
+// existing profile, plus a `needs` list of short questions for sections that
+// can't be filled without more info — the UI prompts the user with those.
 app.post('/api/ai/complete-profile', authRequired, aiLimiter, wrap(async (req, res) => {
   const meRow = await findUser(req.user.id);
-  const notes = String((req.body && req.body.notes) || '').trim().slice(0, 1500);
-  const seed = notes || ai.profileEmbedText(meRow);
-  if (!seed) return res.status(400).json({ error: 'Add a few notes about yourself first.' });
-  const prompt = `Based on this info about a professional, produce profile content.\n\nINFO:\n${seed}\n\n` +
-    `Return JSON: {"headline":"<max 120 chars>","about":"<2-4 sentence first-person About>","skills":["s1","s2","s3","s4","s5","s6"]}.`;
+  const notes = String((req.body && req.body.notes) || '').trim().slice(0, 2500);
+  const existing = ai.profileEmbedText(meRow);
+  if (!notes && !existing) return res.status(400).json({ error: 'Add a few notes about yourself first.' });
+  const prompt =
+    `You are completing a professional network profile. Use ONLY the information below — ` +
+    `never invent employers, schools, dates, languages or locations that are not stated or strongly implied.\n\n` +
+    `EXISTING PROFILE:\n${existing || '(empty)'}\n\nUSER NOTES:\n${notes || '(none)'}\n\n` +
+    `Produce polished content for every section you CAN ground in that info, and list the sections you ` +
+    `CANNOT fill in "needs" with one short, specific question each (e.g. experience dates, school name).\n` +
+    `Return JSON exactly in this shape:\n` +
+    `{"headline":"<max 120 chars>",` +
+    `"about":"<2-4 sentence first-person About>",` +
+    `"skills":["s1","s2"],` +
+    `"experience":[{"title":"","company":"","from":"<e.g. 2022>","to":"<e.g. Present>","description":"<1 sentence>"}],` +
+    `"education":[{"school":"","degree":"","from":"","to":""}],` +
+    `"languages":["English"],` +
+    `"interests":["i1"],` +
+    `"open_to_work_roles":"<comma-separated roles, or empty>",` +
+    `"needs":[{"section":"experience","question":"<what to ask the user>"}]}\n` +
+    `Use empty strings/arrays for sections without enough info, and mention each of those in "needs".`;
   try {
-    const data = await ai.generateJSON(prompt, { maxTokens: 700, temperature: 0.7 });
+    const data = await ai.generateJSON(prompt, { maxTokens: 1400, temperature: 0.6 });
     if (!data) return res.status(502).json({ error: 'Could not generate profile content. Try again.' });
+    const str = (v, max) => String(v || '').trim().slice(0, max);
+    const strArr = (v, max) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean).slice(0, max) : [];
+    const exp = Array.isArray(data.experience) ? data.experience.map(e => ({
+      title: str(e && e.title, 120), company: str(e && e.company, 120),
+      from: str(e && e.from, 24), to: str(e && e.to, 24),
+      description: str(e && e.description, 400),
+    })).filter(e => e.title || e.company).slice(0, 8) : [];
+    const edu = Array.isArray(data.education) ? data.education.map(e => ({
+      school: str(e && e.school, 140), degree: str(e && e.degree, 140),
+      from: str(e && e.from, 24), to: str(e && e.to, 24),
+    })).filter(e => e.school || e.degree).slice(0, 6) : [];
+    const needs = Array.isArray(data.needs) ? data.needs.map(n => ({
+      section: str(n && n.section, 40), question: str(n && n.question, 200),
+    })).filter(n => n.section && n.question).slice(0, 8) : [];
     res.json({
-      headline: String(data.headline || '').slice(0, 160),
-      about: String(data.about || '').slice(0, 1200),
-      skills: Array.isArray(data.skills) ? data.skills.map(s => String(s).trim()).filter(Boolean).slice(0, 10) : [],
+      headline: str(data.headline, 160),
+      about: str(data.about, 1200),
+      skills: strArr(data.skills, 12),
+      experience: exp,
+      education: edu,
+      languages: strArr(data.languages, 8),
+      interests: strArr(data.interests, 10),
+      open_to_work_roles: str(data.open_to_work_roles, 200),
+      needs,
     });
   } catch (e) { sendAIError(res, e); }
 }));
@@ -1826,17 +1867,58 @@ app.post('/api/posts/:id/like', authRequired, wrap(async (req, res) => {
 app.get('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   const postId = Number(req.params.id);
   const r = await q(
-    `SELECT c.id, c.content, c.created_at, c.user_id, c.edited,
-            u.name, u.avatar_color, u.avatar_url, u.headline
+    `SELECT c.id, c.content, c.created_at, c.user_id, c.edited, c.parent_id,
+            u.name, u.avatar_color, u.avatar_url, u.headline,
+            (SELECT COUNT(*)::int FROM comment_likes cl WHERE cl.comment_id = c.id) AS like_count,
+            EXISTS(SELECT 1 FROM comment_likes cl2 WHERE cl2.comment_id = c.id AND cl2.user_id = $2) AS liked_by_me
        FROM comments c JOIN users u ON u.id = c.user_id
       WHERE c.post_id = $1
       ORDER BY c.created_at ASC`,
-    [postId]
+    [postId, req.user.id]
   );
   res.json({ comments: r.rows.map(x => ({
     id: Number(x.id), content: x.content, created_at: Number(x.created_at),
     user_id: Number(x.user_id), name: x.name, avatar_color: x.avatar_color,
     avatar_url: x.avatar_url || null, headline: x.headline, edited: x.edited ? 1 : 0,
+    parent_id: x.parent_id ? Number(x.parent_id) : null,
+    like_count: x.like_count || 0,
+    liked_by_me: !!x.liked_by_me,
+  })) });
+}));
+
+// Toggle a like on a comment. Returns the new state + count.
+app.post('/api/comments/:id/like', authRequired, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const cr = await q(`SELECT id, user_id, post_id FROM comments WHERE id = $1`, [id]);
+  if (cr.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const del = await q(`DELETE FROM comment_likes WHERE user_id = $1 AND comment_id = $2`, [req.user.id, id]);
+  let liked = false;
+  if (del.rowCount === 0) {
+    await q(`INSERT INTO comment_likes (user_id, comment_id, created_at) VALUES ($1,$2,$3)
+             ON CONFLICT DO NOTHING`, [req.user.id, id, Date.now()]);
+    liked = true;
+    await notify(Number(cr.rows[0].user_id), 'comment_like', req.user.id,
+      { post_id: Number(cr.rows[0].post_id), comment_id: id });
+  }
+  const cnt = await q(`SELECT COUNT(*)::int AS c FROM comment_likes WHERE comment_id = $1`, [id]);
+  res.json({ liked, like_count: cnt.rows[0].c });
+}));
+
+// Who reacted to a post — list of users with their reaction type.
+app.get('/api/posts/:id/reactions', authRequired, wrap(async (req, res) => {
+  const postId = Number(req.params.id);
+  const r = await q(
+    `SELECT l.type, l.created_at, u.id, u.name, u.headline, u.avatar_color, u.avatar_url
+       FROM likes l JOIN users u ON u.id = l.user_id
+      WHERE l.post_id = $1
+      ORDER BY l.created_at DESC
+      LIMIT 200`,
+    [postId]
+  );
+  res.json({ reactions: r.rows.map(x => ({
+    type: x.type || 'like',
+    user: { id: Number(x.id), name: x.name, headline: x.headline || '',
+            avatar_color: x.avatar_color, avatar_url: x.avatar_url || null },
   })) });
 }));
 
@@ -1844,14 +1926,30 @@ app.post('/api/posts/:id/comments', authRequired, wrap(async (req, res) => {
   const postId = Number(req.params.id);
   const postR = await q(`SELECT id, user_id FROM posts WHERE id = $1`, [postId]);
   if (postR.rowCount === 0) return res.status(404).json({ error: 'Not found' });
-  const { content } = req.body || {};
+  const { content, parent_id } = req.body || {};
   if (!content || !content.trim()) return res.status(400).json({ error: 'Content required' });
+  // Replies: validate the parent belongs to this post; flatten to one level
+  // (replying to a reply attaches to the top-level parent, LinkedIn-style).
+  let parentId = null;
+  let parentAuthor = null;
+  if (parent_id != null) {
+    const pr = await q(`SELECT id, user_id, parent_id FROM comments WHERE id = $1 AND post_id = $2`,
+      [Number(parent_id), postId]);
+    if (pr.rowCount === 0) return res.status(400).json({ error: 'Invalid parent comment' });
+    parentId = pr.rows[0].parent_id ? Number(pr.rows[0].parent_id) : Number(pr.rows[0].id);
+    parentAuthor = Number(pr.rows[0].user_id);
+  }
   const ins = await q(
-    `INSERT INTO comments (user_id, post_id, content, created_at) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [req.user.id, postId, sanitizeText(content.trim()), Date.now()]
+    `INSERT INTO comments (user_id, post_id, content, parent_id, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [req.user.id, postId, sanitizeText(content.trim()), parentId, Date.now()]
   );
   await notify(Number(postR.rows[0].user_id), 'comment', req.user.id,
     { post_id: postId, comment_id: Number(ins.rows[0].id) });
+  // Also tell the comment author someone replied to them (if different person).
+  if (parentAuthor && parentAuthor !== Number(postR.rows[0].user_id)) {
+    await notify(parentAuthor, 'reply', req.user.id,
+      { post_id: postId, comment_id: Number(ins.rows[0].id) });
+  }
   res.json({ id: Number(ins.rows[0].id) });
 }));
 

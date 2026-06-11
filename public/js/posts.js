@@ -197,6 +197,16 @@ function wirePost(el, p, opts = {}) {
   rewireLike();
 
   el.querySelector('.comment-btn').onclick = () => toggleComments(el, id);
+  // The "N comments · M reposts" stat line opens the comment section too,
+  // and the reaction summary opens the "who reacted" list.
+  const commentStat = el.querySelector('.comment-stat');
+  if (commentStat) commentStat.onclick = () => {
+    const box = el.querySelector('.comments');
+    if (box && !box.hidden) { box.hidden = true; return; }
+    toggleComments(el, id);
+  };
+  const likeStat = el.querySelector('.like-stat');
+  if (likeStat) likeStat.onclick = () => openReactionsModal(p);
   el.querySelector('.repost-btn').onclick = () => openRepostModal(p, opts.onChange);
   el.querySelector('.send-btn').onclick = () => openSendModal(p);
   el.querySelector('.share-btn').onclick = () => openShareSheet(p);
@@ -211,6 +221,26 @@ function wirePost(el, p, opts = {}) {
   } else { more.style.visibility = 'hidden'; }
 }
 
+// Who reacted to a post — list with each person's reaction emoji.
+async function openReactionsModal(p) {
+  const m = openModal({ title: 'Reactions', body: '<p class="empty">Loading…</p>', footer: '' });
+  let reactions = [];
+  try { ({ reactions } = await api(`/api/posts/${p.id}/reactions`)); }
+  catch (e) { m.el.querySelector('.modal-body, p.empty') && (m.el.querySelector('p.empty').textContent = 'Could not load reactions.'); return; }
+  const bodyHost = m.el.querySelector('p.empty').parentNode;
+  if (!reactions.length) { m.el.querySelector('p.empty').textContent = 'No reactions yet.'; return; }
+  bodyHost.innerHTML = `<div class="rx-list">` + reactions.map(r => {
+    const rx = reactionById(r.type) || { emoji: '👍' };
+    return `<a class="rx-row" href="/profile.html?id=${r.user.id}">
+      <span class="rx-row-av">${avatar(r.user, 'md')}<span class="rx-badge">${rx.emoji}</span></span>
+      <span class="rx-row-info">
+        <b>${escapeHTML(r.user.name)}</b>
+        <small>${escapeHTML(r.user.headline || '')}</small>
+      </span>
+    </a>`;
+  }).join('') + `</div>`;
+}
+
 async function toggleComments(el, id) {
   const box = el.querySelector('.comments');
   if (!box.hidden) { box.hidden = true; return; }
@@ -218,14 +248,17 @@ async function toggleComments(el, id) {
   box.innerHTML = '<p class="empty">Loading…</p>';
   const { comments } = await api(`/api/posts/${id}/comments`);
   const me = getMe();
-  box.innerHTML = comments.map(c => commentHTML(c, me)).join('') + `
+  // Thread: top-level comments in order, each with its replies nested under it.
+  const tops = comments.filter(c => !c.parent_id);
+  const repliesOf = (cid) => comments.filter(c => c.parent_id === cid);
+  box.innerHTML = tops.map(c => commentHTML(c, me, repliesOf(c.id))).join('') + `
     <form class="comment-form">
       ${avatar(me, 'sm')}
       <input placeholder="Add a comment…" required />
       <button class="btn btn-primary" type="submit">Send</button>
     </form>`;
   box.querySelectorAll('.comment').forEach(node => wireComment(node, el, id));
-  box.querySelector('form').onsubmit = async (ev) => {
+  box.querySelector('form.comment-form').onsubmit = async (ev) => {
     ev.preventDefault();
     const input = ev.target.querySelector('input');
     const v = input.value.trim();
@@ -234,17 +267,22 @@ async function toggleComments(el, id) {
     await api(`/api/posts/${id}/comments`, { method: 'POST', body: { content: v } });
     input.value = '';
     box.hidden = true; toggleComments(el, id);
-    const stat = el.querySelector('.comment-stat');
-    const m = stat.textContent.match(/(\d+) comments · (\d+) reposts/);
-    if (m) stat.textContent = `${(+m[1])+1} comments · ${m[2]} reposts`;
+    bumpCommentStat(el, +1);
   };
+}
+
+function bumpCommentStat(el, delta) {
+  const stat = el.querySelector('.comment-stat');
+  if (!stat) return;
+  const m = stat.textContent.match(/(\d+) comments · (\d+) reposts/);
+  if (m) stat.textContent = `${Math.max(0, (+m[1]) + delta)} comments · ${m[2]} reposts`;
 }
 
 // Comments are editable for 2 minutes and deletable for 5 minutes after posting.
 const COMMENT_EDIT_MS = 2 * 60 * 1000;
 const COMMENT_DELETE_MS = 5 * 60 * 1000;
 
-function commentHTML(c, me) {
+function commentHTML(c, me, replies) {
   const mine = me && c.user_id === me.id;
   const age = Date.now() - c.created_at;
   let actions = '';
@@ -257,20 +295,76 @@ function commentHTML(c, me) {
     if (parts.length) actions = `<div class="comment-actions">${parts.join(' · ')}</div>`;
   }
   const edited = c.edited ? ' <span class="edited-tag">(edited)</span>' : '';
+  const isReply = !!c.parent_id;
+  const likeCls = c.liked_by_me ? ' on' : '';
+  const likeCount = c.like_count ? ` <span class="c-like-n">${c.like_count}</span>` : ' <span class="c-like-n"></span>';
+  const replyBtn = isReply ? '' : ' · <button type="button" class="c-meta-btn c-reply">Reply</button>';
+  const repliesHTML = (replies && replies.length)
+    ? `<div class="comment-replies">${replies.map(r => commentHTML(r, me, [])).join('')}</div>` : '';
   return `
-    <div class="comment" data-cid="${c.id}" data-created="${c.created_at}">
+    <div class="comment${isReply ? ' is-reply' : ''}" data-cid="${c.id}" data-created="${c.created_at}">
       ${avatar({ name: c.name, avatar_color: c.avatar_color, avatar_url: c.avatar_url }, 'sm')}
-      <div class="bubble">
-        <a href="/profile.html?id=${c.user_id}"><span class="name">${escapeHTML(c.name)}</span></a>
-        <div class="headline">${escapeHTML(c.headline || '')}</div>
-        <span class="c-text">${escapeHTML(c.content)}</span>${edited}
-        ${actions}
+      <div class="bubble-wrap">
+        <div class="bubble">
+          <a href="/profile.html?id=${c.user_id}"><span class="name">${escapeHTML(c.name)}</span></a>
+          <div class="headline">${escapeHTML(c.headline || '')}</div>
+          <span class="c-text">${escapeHTML(c.content)}</span>${edited}
+          ${actions}
+        </div>
+        <div class="c-meta">
+          <button type="button" class="c-meta-btn c-like${likeCls}">👍 Like${likeCount}</button>${replyBtn}
+          <span class="c-time">${timeAgo(c.created_at)}</span>
+        </div>
+        ${repliesHTML}
       </div>
     </div>`;
 }
 
 function wireComment(node, el, postId) {
   const cid = node.dataset.cid;
+
+  // Like toggle (works for top-level comments and replies alike).
+  const likeBtn = node.querySelector(':scope > .bubble-wrap > .c-meta .c-like');
+  if (likeBtn) likeBtn.onclick = async () => {
+    likeBtn.disabled = true;
+    try {
+      const r = await api(`/api/comments/${cid}/like`, { method: 'POST' });
+      likeBtn.classList.toggle('on', r.liked);
+      const n = likeBtn.querySelector('.c-like-n');
+      if (n) n.textContent = r.like_count ? String(r.like_count) : '';
+    } catch (e) { toast(e.message || 'Could not like comment.'); }
+    likeBtn.disabled = false;
+  };
+
+  // Reply: inline one-shot form under this comment.
+  const replyBtn = node.querySelector(':scope > .bubble-wrap > .c-meta .c-reply');
+  if (replyBtn) replyBtn.onclick = () => {
+    const wrap = node.querySelector(':scope > .bubble-wrap');
+    let form = wrap.querySelector(':scope > .reply-form');
+    if (form) { form.querySelector('input').focus(); return; }
+    const me = getMe();
+    form = document.createElement('form');
+    form.className = 'comment-form reply-form';
+    form.innerHTML = `${avatar(me, 'sm')}<input placeholder="Write a reply…" required /><button class="btn btn-primary" type="submit">Reply</button>`;
+    // Replies live above any existing nested replies, right after the meta row.
+    const meta = wrap.querySelector(':scope > .c-meta');
+    meta.insertAdjacentElement('afterend', form);
+    form.querySelector('input').focus();
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const input = form.querySelector('input');
+      const v = input.value.trim();
+      if (!v) return;
+      if (window.AI && !(await AI.tonePrecheck(v))) return;
+      try {
+        await api(`/api/posts/${postId}/comments`, { method: 'POST', body: { content: v, parent_id: Number(cid) } });
+        const box = el.querySelector('.comments');
+        box.hidden = true; toggleComments(el, postId);
+        bumpCommentStat(el, +1);
+      } catch (e) { toast(e.message || 'Could not reply.'); }
+    };
+  };
+
   const editLink = node.querySelector('.c-edit');
   const delLink = node.querySelector('.c-del');
   if (editLink) editLink.onclick = (e) => {

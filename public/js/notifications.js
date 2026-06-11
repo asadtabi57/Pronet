@@ -7,6 +7,8 @@
   const verb = {
     like: 'liked your post',
     comment: 'commented on your post',
+    comment_like: 'liked your comment',
+    reply: 'replied to your comment',
     repost: 'reposted your post',
     share: 'shared your post',
     connect: 'connected with you',
@@ -22,6 +24,8 @@
   const link = {
     like: n => `/feed.html#post-${n.payload.post_id}`,
     comment: n => `/feed.html#post-${n.payload.post_id}`,
+    comment_like: n => `/feed.html#post-${n.payload.post_id}`,
+    reply: n => `/feed.html#post-${n.payload.post_id}`,
     repost: n => `/feed.html#post-${n.payload.post_id}`,
     share: n => `/feed.html#post-${n.payload.post_id}`,
     new_post: n => `/feed.html#post-${n.payload.post_id}`,

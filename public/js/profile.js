@@ -613,8 +613,8 @@
   // ---------- AI: COMPLETE WITH AI ----------
   function openCompleteWithAI() {
     const body = `
-      <p class="ai-coach-intro">Tell me a few rough notes about yourself and I'll draft your headline, About, and skills.</p>
-      <div class="field"><label>Quick notes</label><textarea id="cwa-notes" rows="3" placeholder="e.g. react dev 3 yrs, built ecommerce, into AI/LLMs, based in Pakistan"></textarea></div>
+      <p class="ai-coach-intro">Tell me a few rough notes about yourself and I'll draft <b>every section</b> of your profile — headline, About, skills, experience, education, languages and interests. I'll ask if anything important is missing.</p>
+      <div class="field"><label>Quick notes</label><textarea id="cwa-notes" rows="3" placeholder="e.g. react dev 3 yrs at TechCorp since 2022, BSCS from FAST 2021, speak English/Urdu, into AI"></textarea></div>
       <button type="button" class="btn-fill" id="cwa-go" style="width:100%">Generate</button>
       <div id="cwa-out" hidden></div>`;
     const m = openModal({ title: '✨ Complete profile with AI', body });
@@ -626,14 +626,47 @@
       out.innerHTML = `<div class="ai-loading"><span class="ai-spinner"></span> Generating…</div>`;
       try {
         const r = await api('/api/ai/complete-profile', { method: 'POST', body: { notes: notes.value.trim() } });
+        const sec = (label, html) => html
+          ? `<div class="cwa-field"><label>${label}</label><div class="cwa-val">${html}</div></div>` : '';
+        const expHTML = (r.experience || []).map(e =>
+          `<div class="cwa-item"><b>${escapeHTML(e.title || '')}</b>${e.company ? ' · ' + escapeHTML(e.company) : ''}` +
+          `${(e.from || e.to) ? ` <small>(${escapeHTML(e.from || '?')} – ${escapeHTML(e.to || 'Present')})</small>` : ''}` +
+          `${e.description ? `<div class="cwa-desc">${escapeHTML(e.description)}</div>` : ''}</div>`).join('');
+        const eduHTML = (r.education || []).map(e =>
+          `<div class="cwa-item"><b>${escapeHTML(e.school || '')}</b>${e.degree ? ' · ' + escapeHTML(e.degree) : ''}` +
+          `${(e.from || e.to) ? ` <small>(${escapeHTML(e.from || '?')} – ${escapeHTML(e.to || '')})</small>` : ''}</div>`).join('');
+        const chips = (arr) => (arr || []).map(s => `<span class="skill-chip">${escapeHTML(s)}</span>`).join(' ');
+        // Sections that still need user-provided info → explicit prompts.
+        const needsHTML = (r.needs && r.needs.length)
+          ? `<div class="cwa-needs"><b>To finish the remaining sections, tell me:</b><ul>` +
+            r.needs.map(n => `<li><b>${escapeHTML(n.section)}</b> — ${escapeHTML(n.question)}</li>`).join('') +
+            `</ul><small>Add these details to your notes above and hit Generate again.</small></div>` : '';
         out.innerHTML = `
-          <div class="cwa-field"><label>Headline</label><div class="cwa-val">${escapeHTML(r.headline)}</div></div>
-          <div class="cwa-field"><label>About</label><div class="cwa-val">${escapeHTML(r.about)}</div></div>
-          <div class="cwa-field"><label>Skills</label><div class="cwa-val">${(r.skills || []).map(s => `<span class="skill-chip">${escapeHTML(s)}</span>`).join(' ')}</div></div>
-          <button type="button" class="btn-fill" id="cwa-apply" style="width:100%;margin-top:12px">Apply to my profile</button>`;
+          ${sec('Headline', r.headline ? escapeHTML(r.headline) : '')}
+          ${sec('About', r.about ? escapeHTML(r.about) : '')}
+          ${sec('Skills', chips(r.skills))}
+          ${sec('Experience', expHTML)}
+          ${sec('Education', eduHTML)}
+          ${sec('Languages', chips(r.languages))}
+          ${sec('Interests', chips(r.interests))}
+          ${sec('Open-to-work roles', r.open_to_work_roles ? escapeHTML(r.open_to_work_roles) : '')}
+          ${needsHTML}
+          <button type="button" class="btn-fill" id="cwa-apply" style="width:100%;margin-top:12px">Apply filled sections to my profile</button>`;
         out.querySelector('#cwa-apply').onclick = async () => {
           try {
-            const upd = await api('/api/me', { method: 'PUT', body: { headline: r.headline, about: r.about, skills: r.skills } });
+            // Only write sections the AI actually produced — empty ones (the
+            // "needs" list) never overwrite what's already on the profile.
+            const body = {};
+            if (r.headline) body.headline = r.headline;
+            if (r.about) body.about = r.about;
+            if (r.skills && r.skills.length) body.skills = r.skills;
+            if (r.experience && r.experience.length) body.experience = r.experience;
+            if (r.education && r.education.length) body.education = r.education;
+            if (r.languages && r.languages.length) body.languages = r.languages;
+            if (r.interests && r.interests.length) body.interests = r.interests;
+            if (r.open_to_work_roles) body.open_to_work_roles = r.open_to_work_roles;
+            if (!Object.keys(body).length) { toast('Nothing to apply yet — add more notes.'); return; }
+            const upd = await api('/api/me', { method: 'PUT', body });
             setMe(upd.user); m.close(); toast('Profile updated with AI ✨'); reload();
           } catch (e) { toast(e.message); }
         };
