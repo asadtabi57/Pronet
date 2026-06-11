@@ -32,37 +32,61 @@
   });
 
   // ---- Speech recognition (STT) ----
-  // Continuous dictation: browsers kill recognition sessions on short pauses
-  // (and Android ends them after every utterance even with continuous=true),
-  // so we accumulate finalized text across sessions and auto-restart in onend
-  // until the user explicitly taps the mic off. Nothing stops on its own.
+  // Continuous dictation that never stops on its own — the user taps the mic
+  // off when finished. Two Android-specific landmines handled here:
+  //   1. Android Chrome's continuous mode replays/duplicates final results in
+  //      the results list (the classic "you are you are you are" bug), so on
+  //      Android we run one-utterance sessions and auto-restart on end.
+  //   2. resultIndex is unreliable across devices, so the session transcript
+  //      is REBUILT from the whole results list on every event instead of
+  //      being appended to incrementally.
+  // Text from finished sessions is folded into `baseText` (which also keeps
+  // anything the user typed), so nothing is ever lost across restarts.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let recog = null, listening = false, finalText = '';
+  const IS_ANDROID = /android/i.test(navigator.userAgent);
+  let recog = null, listening = false, baseText = '';
+
+  const joinClean = (...parts) => parts.join(' ').replace(/\s+/g, ' ').trim();
+  // Collapse immediately-repeated phrases (1-6 words): "my main goal my main
+  // goal was" → "my main goal was". Android only — that's where the engine
+  // itself emits the duplicates.
+  function collapseRepeats(s) {
+    if (!IS_ANDROID) return s;
+    let out = s.replace(/\s+/g, ' ').trim(), prev;
+    do {
+      prev = out;
+      out = out.replace(/\b((?:\S+ ){0,5}\S+) \1\b/gi, '$1');
+    } while (out !== prev);
+    return out;
+  }
+
   if (SR) {
     recog = new SR();
-    recog.continuous = true;
+    recog.continuous = !IS_ANDROID;
     recog.interimResults = true;
     recog.lang = 'en-US';
     recog.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
+      let sessionFinal = '', interim = '';
+      for (let i = 0; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) {
-          finalText = (finalText + ' ' + t).replace(/\s+/g, ' ').trim();
-        } else {
-          interim += t;
-        }
+        if (e.results[i].isFinal) sessionFinal += t + ' ';
+        else interim += t + ' ';
       }
-      answerEl.value = (finalText + ' ' + interim).replace(/\s+/g, ' ').trim();
+      answerEl.value = collapseRepeats(joinClean(baseText, sessionFinal, interim));
       autoGrow(answerEl);
     };
     recog.onend = () => {
-      // Session ended on its own (silence/timeout) while the user still wants
-      // to dictate → seamlessly start a fresh session and keep the text.
+      // Fold whatever is visible (finals + trailing interim the engine never
+      // finalized) into the base, then keep listening until the user stops.
+      baseText = answerEl.value.replace(/\s+/g, ' ').trim();
       if (listening) {
-        try { recog.start(); return; } catch (e) { /* fall through to off */ }
+        setTimeout(() => {
+          if (!listening) return;
+          try { recog.start(); } catch (e) { /* already starting */ }
+        }, 120);
+        return;
       }
-      listening = false; micBtn.classList.remove('listening');
+      micBtn.classList.remove('listening');
     };
     recog.onerror = (e) => {
       // Transient errors (silence, abort, network blip): onend fires next and
@@ -135,7 +159,7 @@
     if (listening && recog) { listening = false; recog.stop(); micBtn.classList.remove('listening'); }
     history.push({ role: 'candidate', text });
     addBubble('candidate', text);
-    answerEl.value = ''; finalText = ''; autoGrow(answerEl);
+    answerEl.value = ''; baseText = ''; autoGrow(answerEl);
     await nextQuestion();
   }
 
@@ -158,7 +182,7 @@
     micBtn.onclick = () => {
       if (listening) { listening = false; recog.stop(); micBtn.classList.remove('listening'); return; }
       // Keep anything already typed and append dictation after it.
-      finalText = answerEl.value.replace(/\s+/g, ' ').trim();
+      baseText = answerEl.value.replace(/\s+/g, ' ').trim();
       try { recog.start(); listening = true; micBtn.classList.add('listening'); }
       catch (e) { listening = false; }
     };
