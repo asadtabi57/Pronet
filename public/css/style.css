@@ -1656,20 +1656,24 @@ body.app {
   .nav-tab .icon { font-size: 18px; }
   .nav-tab .badge { top: 0; right: -2px; min-width: 14px; height: 14px; font-size: 8px; padding: 0 3px; }
   .search { flex: 1 1 60px; min-width: 60px; }
-  .search input { width: 100%; max-width: none; height: 36px; font-size: var(--fs-13); padding: 8px 10px 8px 32px; }
+  .search input { width: 100%; max-width: none; height: 36px; font-size: 16px; padding: 8px 10px 8px 32px; } /* ≥16px stops iOS focus zoom */
   .search::before { left: 9px; width: 14px; height: 14px; }
   .layout { padding: 0 12px; margin: 12px auto; max-width: 100vw; box-sizing: border-box; }
   .layout > section, .layout > aside, .layout > main { min-width: 0; max-width: 100%; }
   .card { border-radius: var(--r-md); }
   .composer { padding: 12px; gap: 8px; }
-  .composer textarea { padding: 10px 14px; font-size: 14px; min-height: 42px; width: 100%; box-sizing: border-box; }
+  .composer textarea { padding: 10px 14px; font-size: 16px; min-height: 42px; width: 100%; box-sizing: border-box; } /* ≥16px stops iOS focus zoom */
   .composer textarea::placeholder { font-size: 13px; }
   .post { padding: 12px 14px 4px; }
   .post-media { margin-left: -14px; margin-right: -14px; }
   .post-actions { gap: 0; padding: 2px 0; }
-  .post-actions button { padding: 8px 4px; font-size: 12px; gap: 4px; }
+  .post-actions button { padding: 10px 4px; font-size: 12px; gap: 4px; min-height: 40px; }
   .post-actions .label { display: none; }
   .post-actions .icon { font-size: 16px; }
+  /* Comfortable ≥40px tap targets on phones */
+  .btn-tiny { min-height: 40px; }
+  .ps-edit { min-width: 40px; min-height: 40px; }
+  .msg-form textarea { font-size: 16px; } /* ≥16px stops iOS focus zoom */
   .person-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .modal-content { margin: 16px; padding: 20px; }
   .section-title { font-size: var(--fs-16); padding: 0 4px; }
@@ -3006,6 +3010,9 @@ body.app {
     display: flex; align-items: center; justify-content: center; line-height: 1;
   }
   .m-icon-btn .m-badge { top: 6px; right: 6px; margin: 0; }
+  /* Author display:flex above must not defeat the hidden attribute set by
+     mobile.js when the unread count is 0 (cf. .call-remote-audio[hidden]). */
+  .m-badge[hidden] { display: none !important; }
 
   /* ---- Messages: fit between bars; full-screen when a chat is open ---- */
   body.mobile-shell .messaging-shell { margin: 0; padding: 0; max-width: none; }
@@ -3017,6 +3024,9 @@ body.app {
   body.mobile-shell.m-chat-open .m-topbar,
   body.mobile-shell.m-chat-open .m-tabbar { display: none !important; }
   body.mobile-shell.m-chat-open .msg-shell { height: 100dvh; }
+  /* Fullscreen chat strips the body safe-area padding, so the composer must
+     carry its own inset or it sits inside the iPhone home-indicator zone. */
+  body.mobile-shell.m-chat-open .msg-form { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
 
   /* Keep the lounge audio bar clear of the tab bar */
   body.mobile-shell .lounge-audio-bar { bottom: calc(74px + env(safe-area-inset-bottom)); }
@@ -3338,3 +3348,18 @@ html[data-splash="done"] .splash-overlay { display: none !important; }
 }
 .ios-hint-ok:hover { background: var(--brand-dark, #4338ca); }
 
+
+/* ==========================================================================
+   MOBILE AUDIT FIXES � dark-theme leaks + media fallbacks (2026-06)
+   ========================================================================== */
+/* Repost preview was a hardcoded light card in dark mode */
+[data-theme="dark"] .repost-wrap { background: #1a2030; border-color: #2f3747; }
+/* Chat-header call buttons were hardcoded white in dark mode */
+[data-theme="dark"] .call-icon-btn { background: #232a36; color: #7dd3fc; border-color: #2f3747; }
+[data-theme="dark"] .call-icon-btn:hover { background: #2b3344; }
+/* Friendly state for posts whose video source is dead (403/blocked) */
+.media-unavailable {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 110px; color: var(--muted); font-size: 13.5px;
+  background: var(--bg-app-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}

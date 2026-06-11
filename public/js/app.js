@@ -356,10 +356,26 @@ function avatar(u, size = 'sm') {
   const onlineCls = (id != null && window.Presence && Presence.isOnline(id)) ? ' is-online' : '';
   const dot = id != null ? '<span class="presence-dot" aria-hidden="true"></span>' : '';
   if (u.avatar_url) {
-    return `<span class="avatar img ${size}${onlineCls}"${uidAttr}><img src="${escapeHTML(u.avatar_url)}" alt=""/>${dot}</span>`;
+    // data-init/-color let the global error handler below fall back to the
+    // initials variant when a remote avatar URL is dead (e.g. Google blocks
+    // hot-linked OAuth photos with ORB/403 after a while).
+    return `<span class="avatar img ${size}${onlineCls}"${uidAttr} data-init="${escapeHTML(initials(u.name))}" data-color="${escapeHTML(u.avatar_color || '#0a66c2')}"><img src="${escapeHTML(u.avatar_url)}" alt=""/>${dot}</span>`;
   }
   return `<div class="avatar ${size}${onlineCls}"${uidAttr} style="background:${u.avatar_color || '#0a66c2'}">${initials(u.name)}${dot}</div>`;
 }
+
+// Broken remote avatars (blocked/expired URLs) degrade to colored initials.
+// One capture-phase listener covers every avatar ever injected via innerHTML.
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!img || img.tagName !== 'IMG') return;
+  const wrap = img.closest && img.closest('.avatar.img');
+  if (!wrap) return;
+  img.remove();
+  wrap.classList.remove('img');
+  wrap.style.background = wrap.dataset.color || '#0a66c2';
+  wrap.insertAdjacentText('afterbegin', wrap.dataset.init || '?');
+}, true);
 
 function getMe() { return Session.getUser(); }
 function setMe(u) { Session.setUser(u); }
@@ -770,10 +786,16 @@ function confirmDialog(opts = {}) {
 function toast(msg) {
   const el = document.createElement('div');
   el.textContent = msg;
+  // On the phone shell, float above the bottom tab bar (+ home indicator)
+  // instead of underneath it.
+  const mobileBar = document.body.classList.contains('mobile-shell')
+    && window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
   Object.assign(el.style, {
-    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+    position: 'fixed',
+    bottom: mobileBar ? 'calc(86px + env(safe-area-inset-bottom))' : '24px',
+    left: '50%', transform: 'translateX(-50%)',
     background: '#0f172a', color: '#fff', padding: '10px 18px', borderRadius: '999px',
-    fontSize: '14px', zIndex: 200, boxShadow: '0 4px 16px rgba(0,0,0,.18)',
+    fontSize: '14px', zIndex: 10050, boxShadow: '0 4px 16px rgba(0,0,0,.18)',
   });
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2200);

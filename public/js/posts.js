@@ -33,7 +33,7 @@ function likeBtnHTML(p) {
     <div class="reaction-picker" aria-hidden="true">
       ${PICKER_REACTIONS.map((rx, i) => `<button data-rx="${rx.id}" data-label="${rx.label}" title="${rx.label}" style="--i:${i}">${rx.emoji}</button>`).join('')}
     </div>
-    <button class="like-btn ${cls}" type="button"><span class="my-rx">${emoji}</span> <span class="my-lbl">${label}</span></button>
+    <button class="like-btn ${cls}" type="button"><span class="my-rx">${emoji}</span> <span class="my-lbl label">${label}</span></button>
   </div>`;
 }
 
@@ -88,10 +88,10 @@ function renderPostInner(p) {
     </div>
     <div class="post-actions">
       ${likeBtnHTML(p)}
-      <button class="comment-btn"><span class="icon">💬</span> Comment</button>
-      <button class="repost-btn"><span class="icon">🔁</span> Repost</button>
-      <button class="send-btn"><span class="icon">📤</span> Send</button>
-      <button class="share-btn"><span class="icon">🔗</span> Share</button>
+      <button class="comment-btn"><span class="icon">💬</span> <span class="label">Comment</span></button>
+      <button class="repost-btn"><span class="icon">🔁</span> <span class="label">Repost</span></button>
+      <button class="send-btn"><span class="icon">📤</span> <span class="label">Send</span></button>
+      <button class="share-btn"><span class="icon">🔗</span> <span class="label">Share</span></button>
     </div>
     <div class="comments" hidden></div>
   `;
@@ -99,6 +99,15 @@ function renderPostInner(p) {
 
 function wirePost(el, p, opts = {}) {
   const id = p.id;
+  // Dead media source (deleted/blocked upstream) → friendly placeholder
+  // instead of a permanently blank player.
+  const vidEl = el.querySelector('.post-media video');
+  if (vidEl) {
+    vidEl.addEventListener('error', () => {
+      const box = vidEl.closest('.post-media');
+      if (box) box.innerHTML = '<div class="media-unavailable">🎬 Video unavailable</div>';
+    }, { once: true });
+  }
   // Click-to-play YouTube facade → swap in the real player only on demand.
   const fac = el.querySelector('.yt-facade');
   if (fac) {

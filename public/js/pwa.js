@@ -21,9 +21,13 @@
     }).catch(() => {});
   });
 
-  // Reload once the new SW takes control.
+  // Reload once a NEW SW replaces an old one (deploy update). On the very
+  // first install there was no previous controller — the live page is already
+  // current, so reloading would only abort its in-flight API calls.
   let refreshing = false;
+  let hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
     if (refreshing) return;
     refreshing = true;
     location.reload();
@@ -108,6 +112,9 @@
         '<button class="ios-hint-ok">Got it</button>' +
       '</div>';
     document.body.appendChild(back);
+    // Mark as shown for this session immediately — the hint must not re-stack
+    // on every page navigation when the user ignores it without dismissing.
+    try { sessionStorage.setItem('connectik_ios_hint_shown', '1'); } catch (e) {}
     requestAnimationFrame(() => back.classList.add('show'));
     const close = () => {
       try { localStorage.setItem('connectik_ios_hint', '1'); } catch (e) {}
@@ -123,6 +130,7 @@
       if (!isIOS()) return;
       if (window.isStandalonePWA && window.isStandalonePWA()) return;
       if (localStorage.getItem('connectik_ios_hint') === '1') return;
+      if (sessionStorage.getItem('connectik_ios_hint_shown') === '1') return;
       const p = location.pathname;
       if (p === '/' || /\/(index|signup|verify-email|install)\.html$/.test(p)) return; // skip public pages
       setTimeout(showIOSInstallHint, 2500);

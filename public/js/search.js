@@ -4,7 +4,7 @@
 
   const q = new URLSearchParams(location.search).get('q') || '';
   const root = document.getElementById('results');
-  if (!q.trim()) { root.innerHTML = '<div class="card empty">Type a search query in the top bar.</div>'; return; }
+  if (!q.trim()) { root.innerHTML = '<div class="card empty">Search for people and posts — use the search bar, or the 🔍 button up top on mobile.</div>'; return; }
 
   const { people, posts, semantic_people } = await api('/api/search?q=' + encodeURIComponent(q));
   document.getElementById('global-search').value = q;
