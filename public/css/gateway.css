@@ -263,6 +263,22 @@ html[data-theme] body.gw-body { /* outranks the injected dark-theme body rule */
   border-color: rgba(168, 85, 247, 0.6);
   box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.25), 0 0 28px rgba(168, 85, 247, 0.22), 0 0 72px rgba(168, 85, 247, 0.1);
 }
+/* Plain text fields (name, headline…) → soft indigo glow */
+.gw-input[type="text"]:not([inputmode="numeric"]):focus {
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.25), 0 0 28px rgba(99, 102, 241, 0.2), 0 0 72px rgba(99, 102, 241, 0.1);
+}
+
+/* Single-card auth layout (signup page): card centered over the canvas */
+.gw-auth-only {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(18px, 4vw, 48px);
+  padding-bottom: max(clamp(24px, 5vw, 56px), env(safe-area-inset-bottom));
+}
+.gw-auth-only .gw-card { width: min(440px, 100%); }
 
 .gw-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 4px; }
 .gw-hint { color: #64748b; font-size: 12px; }

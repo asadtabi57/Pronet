@@ -5,54 +5,123 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Join Connectik</title>
   <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/gateway.css" />
 </head>
-<body class="auth-page">
-  <section class="login-card">
-    <a href="/" aria-label="Connectik home" style="display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;color:inherit;margin-bottom:14px;font-weight:800;font-size:20px;letter-spacing:-0.03em">
-      <svg viewBox="0 0 512 512" style="width:36px;height:36px" aria-hidden="true">
-        <defs><linearGradient id="suBrandMint" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/></linearGradient></defs>
+<body class="gw-body">
+
+  <!-- Live network backdrop (painted by gateway.js) -->
+  <canvas id="nodes-canvas" aria-hidden="true"></canvas>
+
+  <div id="login-container">
+
+    <nav class="gw-nav" aria-label="Landing">
+      <a class="gw-brand" href="/" aria-label="Connectik home">
+        <svg viewBox="0 0 512 512" aria-hidden="true">
+          <defs>
+            <linearGradient id="gwBrandMint" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+            </linearGradient>
+          </defs>
+          <rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/>
+          <rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/>
+          <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#gwBrandMint)" stroke-width="32"/>
+          <circle cx="256" cy="256" r="14" fill="#ffffff"/>
+        </svg>
+        Connectik
+      </a>
+      <span style="flex:1"></span>
+      <a class="gw-join" href="/">Sign In</a>
+    </nav>
+
+    <main class="gw-main">
+      <section class="gw-auth-only">
+        <div class="gw-card">
+          <!-- Interactive Link Visualizer — same gateway language as sign-in -->
+          <div class="gw-visualizer" id="link-visualizer" aria-hidden="true">
+            <svg viewBox="0 0 400 160" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="gwVizMint" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+                </linearGradient>
+              </defs>
+              <rect class="interactive-link-left"  x="90"  y="30" width="110" height="100" rx="45" fill="none" stroke="#ffffff" stroke-width="24"/>
+              <rect class="interactive-link-right" x="200" y="30" width="110" height="100" rx="45" fill="none" stroke="url(#gwVizMint)" stroke-width="24"/>
+              <circle class="interactive-center-hub" cx="200" cy="80" r="12" fill="#ffffff"/>
+            </svg>
+          </div>
+
+          <!-- Step 1: details -->
+          <div id="signup-step-form">
+            <h2>Let's connect &amp; explore!</h2>
+            <p class="gw-sub">Create your professional account in seconds.</p>
+            <form id="signup-form" novalidate autocomplete="on">
+              <div class="gw-field"><label for="name">Full Name</label><input id="name" name="name" type="text" class="gw-input" placeholder="Jane Doe" autocomplete="name" required /></div>
+              <div class="gw-field"><label for="headline">Headline (optional)</label><input id="headline" name="headline" type="text" class="gw-input" placeholder="Software Engineer at Acme" autocomplete="organization-title" /></div>
+              <div class="gw-field"><label for="email">Email Address</label><input id="email" name="email" type="email" class="gw-input" placeholder="name@domain.com" autocomplete="email" required /></div>
+              <div class="gw-field"><label for="password">Security Key</label><input id="password" name="password" type="password" class="gw-input" placeholder="Min 8 chars, mixed case, number &amp; symbol" autocomplete="new-password" required /></div>
+              <p class="gw-hint" style="margin:-6px 0 4px">Use 8+ characters with uppercase, lowercase, a number and a special character.</p>
+              <p id="signup-error" class="gw-error" role="alert"></p>
+              <button class="gw-connect" type="submit">Create Account</button>
+              <p class="gw-alt">Already a member? <a href="/">Sign in</a></p>
+            </form>
+          </div>
+
+          <!-- Step 2: OTP verification -->
+          <div id="signup-step-otp" style="display:none">
+            <h2>Verify your email</h2>
+            <p class="gw-sub">Enter the 6-digit code we emailed to <strong id="otp-email-label"></strong>.</p>
+            <div class="gw-field">
+              <label for="otp-input">Verification code</label>
+              <input id="otp-input" type="text" class="gw-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:8px;font-size:20px;text-align:center" />
+            </div>
+            <p id="otp-error" class="gw-error" role="alert"></p>
+            <button class="gw-connect" id="otp-verify-btn" type="button">Verify &amp; continue</button>
+            <p class="gw-alt">
+              Didn't get it? <a id="otp-resend" href="#">Resend code</a>
+              &nbsp;·&nbsp; <a id="otp-back" href="#">Change email</a>
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- App shell launch state (revealed after successful verification) -->
+  <div id="app-shell" hidden>
+    <div class="gw-launch">
+      <svg viewBox="0 0 512 512" aria-hidden="true">
+        <defs>
+          <linearGradient id="gwShellMint" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+          </linearGradient>
+        </defs>
         <rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/>
         <rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/>
-        <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#suBrandMint)" stroke-width="32"/>
+        <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#gwShellMint)" stroke-width="32"/>
         <circle cx="256" cy="256" r="14" fill="#ffffff"/>
       </svg>
-      Connectik
-    </a>
-    <!-- Step 1: details -->
-    <div id="signup-step-form">
-      <h2>Let's connect &amp; explore!</h2>
-      <p class="sub">Create your professional account in seconds.</p>
-      <form id="signup-form" novalidate autocomplete="on">
-        <div class="field"><label>Full Name</label><input id="name" name="name" type="text" placeholder="Jane Doe" autocomplete="name" required /></div>
-        <div class="field"><label>Headline (optional)</label><input id="headline" name="headline" type="text" placeholder="Software Engineer at Acme" autocomplete="organization-title" /></div>
-        <div class="field"><label>Email Address</label><input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required /></div>
-        <div class="field"><label>Password</label><input id="password" name="password" type="password" placeholder="Min 8 chars, mixed case, number & symbol" autocomplete="new-password" required /></div>
-        <p class="center-muted" style="font-size:12px;text-align:left;margin:-4px 0 4px">Use 8+ characters with uppercase, lowercase, a number and a special character.</p>
-        <p id="signup-error" class="error"></p>
-        <button class="btn btn-primary btn-block" type="submit">Create Account</button>
-        <p class="center-muted">Already a member? <a class="link" href="/">Sign in</a></p>
-      </form>
+      <h2>Welcome to <b>Connectik</b></h2>
+      <p>Link established — opening your network…</p>
+      <div class="gw-progress"><span></span></div>
+      <nav class="gw-quick" aria-label="Quick destinations">
+        <a href="/feed.html">Home</a>
+        <a href="/network.html">Network</a>
+        <a href="/lounge.html">Lounge</a>
+        <a href="/messages.html">Messages</a>
+      </nav>
     </div>
-
-    <!-- Step 2: OTP verification -->
-    <div id="signup-step-otp" style="display:none">
-      <h2>Verify your email</h2>
-      <p class="sub">Enter the 6-digit code we emailed to <strong id="otp-email-label"></strong>.</p>
-      <div class="field">
-        <label>Verification code</label>
-        <input id="otp-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:8px;font-size:20px;text-align:center" />
-      </div>
-      <p id="otp-error" class="error"></p>
-      <button class="btn btn-primary btn-block" id="otp-verify-btn" type="button">Verify &amp; continue</button>
-      <p class="center-muted">
-        Didn't get it? <a class="link" id="otp-resend" href="#">Resend code</a>
-        &nbsp;·&nbsp; <a class="link" id="otp-back" href="#">Change email</a>
-      </p>
-    </div>
-  </section>
+  </div>
 
   <script src="/js/app.js"></script>
+  <script src="/js/gateway.js"></script>
   <script>
+    // Route post-signup success through the Gateway launch animation; fall
+    // back to a hard redirect if gateway.js failed to load.
+    function enterApp(href) {
+      if (window.Gateway && Gateway.launch) Gateway.launch(href || '/feed.html');
+      else location.href = href || '/feed.html';
+    }
+
     (function () {
       const formStep = document.getElementById('signup-step-form');
       const otpStep  = document.getElementById('signup-step-otp');
@@ -84,10 +153,11 @@
         } catch (ex) {
           const msg = (ex && ex.message) || 'Signup failed.';
           if (/already registered/i.test(msg)) {
-            err.innerHTML = 'Email already registered. <a class="link" href="/">Please login</a>.';
+            err.innerHTML = 'Email already registered. <a class="gw-link" href="/">Please login</a>.';
           } else {
             err.textContent = msg;
           }
+          if (window.Gateway) Gateway.deny();
         } finally {
           btn.disabled = false; btn.textContent = 'Create Account';
         }
@@ -103,7 +173,7 @@
           const data = await api('/api/auth/signup/verify-otp', { method: 'POST', body: { email: pendingEmail, otp } });
           Session.setToken(data.token);
           setMe(data.user);
-          location.href = '/feed.html';
+          enterApp('/feed.html');
         } catch (ex) {
           otpErr.textContent = (ex && ex.message) || 'Verification failed.';
           btn.disabled = false; btn.textContent = 'Verify & continue';
@@ -119,7 +189,7 @@
         otpErr.style.color = ''; otpErr.textContent = 'Sending a new code…';
         try {
           const data = await api('/api/auth/signup/resend-otp', { method: 'POST', body: { email: pendingEmail } });
-          otpErr.style.color = '#057642';
+          otpErr.style.color = '#34d399';
           otpErr.textContent = data.dev_otp ? ('New dev code: ' + data.dev_otp) : 'A new code is on its way.';
         } catch (ex) {
           otpErr.textContent = (ex && ex.message) || 'Could not resend code.';
