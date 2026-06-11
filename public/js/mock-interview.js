@@ -32,21 +32,47 @@
   });
 
   // ---- Speech recognition (STT) ----
+  // Continuous dictation: browsers kill recognition sessions on short pauses
+  // (and Android ends them after every utterance even with continuous=true),
+  // so we accumulate finalized text across sessions and auto-restart in onend
+  // until the user explicitly taps the mic off. Nothing stops on its own.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let recog = null, listening = false;
+  let recog = null, listening = false, finalText = '';
   if (SR) {
     recog = new SR();
-    recog.continuous = false;
+    recog.continuous = true;
     recog.interimResults = true;
     recog.lang = 'en-US';
     recog.onresult = (e) => {
-      let txt = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
-      answerEl.value = txt;
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          finalText = (finalText + ' ' + t).replace(/\s+/g, ' ').trim();
+        } else {
+          interim += t;
+        }
+      }
+      answerEl.value = (finalText + ' ' + interim).replace(/\s+/g, ' ').trim();
       autoGrow(answerEl);
     };
-    recog.onend = () => { listening = false; micBtn.classList.remove('listening'); };
-    recog.onerror = () => { listening = false; micBtn.classList.remove('listening'); };
+    recog.onend = () => {
+      // Session ended on its own (silence/timeout) while the user still wants
+      // to dictate → seamlessly start a fresh session and keep the text.
+      if (listening) {
+        try { recog.start(); return; } catch (e) { /* fall through to off */ }
+      }
+      listening = false; micBtn.classList.remove('listening');
+    };
+    recog.onerror = (e) => {
+      // Transient errors (silence, abort, network blip): onend fires next and
+      // restarts us. Only hard permission failures turn the mic off.
+      if (listening && ['no-speech', 'aborted', 'network'].includes(e.error)) return;
+      listening = false; micBtn.classList.remove('listening');
+      if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(e.error) && voiceNote) {
+        voiceNote.textContent = 'Microphone is blocked — allow mic access in your browser to dictate answers.';
+      }
+    };
   } else {
     if (voiceNote) voiceNote.textContent = 'Tip: voice input isn\'t supported in this browser — you can type your answers instead.';
     if (micBtn) micBtn.style.display = 'none';
@@ -106,10 +132,10 @@
     if (busy) return;
     const text = answerEl.value.trim();
     if (!text) { answerEl.focus(); return; }
-    if (listening && recog) { recog.stop(); listening = false; micBtn.classList.remove('listening'); }
+    if (listening && recog) { listening = false; recog.stop(); micBtn.classList.remove('listening'); }
     history.push({ role: 'candidate', text });
     addBubble('candidate', text);
-    answerEl.value = ''; autoGrow(answerEl);
+    answerEl.value = ''; finalText = ''; autoGrow(answerEl);
     await nextQuestion();
   }
 
@@ -130,8 +156,10 @@
 
   if (micBtn && recog) {
     micBtn.onclick = () => {
-      if (listening) { recog.stop(); listening = false; micBtn.classList.remove('listening'); return; }
-      try { answerEl.value = ''; recog.start(); listening = true; micBtn.classList.add('listening'); }
+      if (listening) { listening = false; recog.stop(); micBtn.classList.remove('listening'); return; }
+      // Keep anything already typed and append dictation after it.
+      finalText = answerEl.value.replace(/\s+/g, ' ').trim();
+      try { recog.start(); listening = true; micBtn.classList.add('listening'); }
       catch (e) { listening = false; }
     };
   }

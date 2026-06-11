@@ -381,6 +381,24 @@ function getMe() { return Session.getUser(); }
 function setMe(u) { Session.setUser(u); }
 function requireAuth() {
   if (!Session.isValid()) {
+    // Arriving from an incoming-call notification with the app fully closed:
+    // the client-side session markers are gone (browser sessionStorage), but
+    // the httpOnly auth cookie is usually still valid. Resurrect the session
+    // from the cookie instead of bouncing to the landing page — otherwise the
+    // call can never be answered. Scoped to call deep-links only so the normal
+    // 5-minute idle policy for browser tabs stays intact.
+    if (/[?&]call=\d+/.test(location.search)) {
+      document.body.style.visibility = 'hidden'; // no flash while we probe
+      fetch('/api/me', { credentials: 'include' })
+        .then(r => { if (!r.ok) throw new Error('unauthed'); return r.json(); })
+        .then(d => {
+          Session.setAuthed();
+          if (d && d.user) Session.setUser(d.user);
+          location.reload(); // boot the page properly with a live session
+        })
+        .catch(() => { signOut(); });
+      return false;
+    }
     signOut(Session.isAuthed() ? 'Session expired due to inactivity.' : null);
     return false;
   }

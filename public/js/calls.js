@@ -24,6 +24,7 @@
     haveRemoteDesc: false,
     timer: null,
     ringTimer: null,
+    discTimer: null,   // grace timer while the peer is reconnecting
     startedAt: null,
     muted: false,
     camOff: false,
@@ -104,7 +105,7 @@
       </div>`;
     document.body.appendChild(elIncoming);
 
-    ringAudio = new Audio('/ringtone.mp3');
+    ringAudio = new Audio('/ringtone.wav');
     ringAudio.preload = 'auto';
 
     document.getElementById('ctrl-mute').onclick = toggleMute;
@@ -146,6 +147,7 @@
       document.getElementById('cm-avatar').innerHTML = avatarMarkup(u);
       document.getElementById('cm-name').textContent = u.name || 'In call';
     }
+    persistCallState();
   }
 
   // Keep the screen awake during a call (released in cleanup). Re-acquired on
@@ -194,9 +196,9 @@
     if ('vibrate' in navigator) { try { navigator.vibrate(0); } catch (e) {} }
   }
 
-  function startTimer() {
-    if (state.timer) return;
-    state.startedAt = Date.now();
+  function startTimer(since) {
+    if (state.timer) { if (since) state.startedAt = since; return; }
+    state.startedAt = since || Date.now();
     const t = document.getElementById('call-timer');
     t.hidden = false;
     state.timer = setInterval(() => {
@@ -210,10 +212,71 @@
   }
 
   async function signal(type, payload) {
-    if (!state.call) return;
+    if (!state.call) return false;
     try {
       await api(`/api/calls/${state.call.id}/signal`, { method: 'POST', body: { type, payload } });
-    } catch (e) { console.error('signal failed', type, e); }
+      return true;
+    } catch (e) { console.error('signal failed', type, e); return false; }
+  }
+
+  // ---------- Cross-navigation call resume ----------
+  // An MPA page change tears down the page (and with it the RTCPeerConnection),
+  // but the CALL itself shouldn't die just because the user tapped another tab.
+  // We persist the active call in sessionStorage on pagehide; the next page's
+  // calls.js picks it up, reacquires the mic/camera and sends a fresh offer
+  // (brand-new PC = implicit ICE restart). The peer applies it to their
+  // existing connection and audio/video resumes after a short blip.
+  const RESUME_KEY = 'ck_active_call';
+  const RESUME_MAX_AGE_MS = 30000;
+
+  function persistCallState() {
+    try {
+      if (!state.call || state.call.status !== 'accepted') return;
+      sessionStorage.setItem(RESUME_KEY, JSON.stringify({
+        call: state.call, role: state.role, peerUser: state.peerUser,
+        mediaType: state.mediaType, muted: state.muted,
+        minimized: state.minimized, startedAt: state.startedAt,
+        at: Date.now(),
+      }));
+    } catch (e) {}
+  }
+  function clearResume() { try { sessionStorage.removeItem(RESUME_KEY); } catch (e) {} }
+
+  async function tryResumeCall() {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(RESUME_KEY) || 'null'); } catch (e) {}
+    if (!saved || !saved.call) return false;
+    clearResume(); // single shot — a failed resume must not loop
+    if (Date.now() - (saved.at || 0) > RESUME_MAX_AGE_MS) return false;
+
+    state.call = saved.call;
+    state.role = saved.role;
+    state.peerUser = saved.peerUser;
+    state.facingMode = 'user';
+    const wantVideo = saved.mediaType === 'video';
+    try {
+      state.localStream = await getMedia(wantVideo);
+    } catch (e) {
+      // Mic unavailable on this page → give up cleanly so the peer's grace
+      // timer ends the call instead of leaving them hanging.
+      api(`/api/calls/${state.call.id}/end`, { method: 'POST' }).catch(() => {});
+      cleanup();
+      return false;
+    }
+    setupCallWindow(saved.mediaType);
+    renderPeerInfo();
+    setStatus('Reconnecting…');
+    if (saved.muted) toggleMute();
+    state.pc = createPeer();
+    try {
+      const offer = await state.pc.createOffer();
+      await state.pc.setLocalDescription(offer);
+      const ok = await signal('webrtc_offer', offer);
+      if (!ok) { cleanup(); return false; } // call was ended/expired server-side
+    } catch (e) { cleanup(); return false; }
+    startTimer(saved.startedAt || Date.now());
+    if (saved.minimized) setMinimized(true);
+    return true;
   }
 
   // ---------- Media + PeerConnection ----------
@@ -277,10 +340,27 @@
     };
     pc.onicecandidate = (ev) => { if (ev.candidate) signal('ice_candidate', ev.candidate); };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-        if (pc.connectionState === 'failed') endCall(true);
+      if (pc.connectionState === 'connected') {
+        clearTimeout(state.discTimer); state.discTimer = null;
+        setStatus('Connected');
+        syncRemoteMedia();
+        persistCallState();
+        return;
       }
-      if (pc.connectionState === 'connected') { setStatus('Connected'); syncRemoteMedia(); }
+      // 'disconnected'/'failed' can mean the peer is mid-navigation and about
+      // to send us an ICE-restart offer (cross-page call resume). Give them a
+      // grace window before tearing the call down.
+      if (['failed', 'disconnected'].includes(pc.connectionState)) {
+        setStatus('Reconnecting…');
+        if (!state.discTimer) {
+          state.discTimer = setTimeout(() => {
+            state.discTimer = null;
+            if (state.pc && ['failed', 'disconnected', 'closed'].includes(state.pc.connectionState)) {
+              endCall(true);
+            }
+          }, 12000);
+        }
+      }
     };
     // local tracks
     state.localStream.getTracks().forEach(tr => pc.addTrack(tr, state.localStream));
@@ -430,6 +510,7 @@
   // button (?call=ID&action=answer).
   async function checkPendingCall(autoAnswerId) {
     if (state.call) return;
+    try { sessionStorage.removeItem('ck_auto_answer'); } catch (e) {}
     let call = null;
     try { ({ call } = await api('/api/calls/pending')); } catch (e) { return; }
     if (!call || state.call) return;
@@ -451,7 +532,8 @@
       return;
     }
     try {
-      await api(`/api/calls/${state.call.id}/accept`, { method: 'POST' });
+      const r = await api(`/api/calls/${state.call.id}/accept`, { method: 'POST' });
+      if (r && r.call) state.call = r.call; // now status:'accepted'
     } catch (e) {
       toast(e.message || 'Could not accept the call.');
       cleanup();
@@ -462,6 +544,7 @@
     setStatus('Connecting…');
     // Receiver waits for the caller's offer; build the peer now.
     state.pc = createPeer();
+    persistCallState();
   }
 
   function rejectIncoming() {
@@ -483,12 +566,14 @@
     if (event === 'call_accept') {
       // Caller: peer accepted → create offer.
       clearTimeout(state.ringTimer);
+      if (data.call) state.call = data.call; // now status:'accepted'
       setStatus('Connecting…');
       state.pc = createPeer();
       const offer = await state.pc.createOffer();
       await state.pc.setLocalDescription(offer);
       signal('webrtc_offer', offer);
       startTimer();
+      persistCallState();
     } else if (event === 'call_reject') {
       toast('Call declined.');
       cleanup();
@@ -544,6 +629,7 @@
     const b = document.getElementById('ctrl-mute');
     b.classList.toggle('off', state.muted);
     b.querySelector('small').textContent = state.muted ? 'Unmute' : 'Mute';
+    persistCallState();
   }
 
   // Upgrade an audio call to video mid-call (WhatsApp-style). Adds a camera
@@ -590,6 +676,7 @@
     updateCtrlButtons('video');
     if (btn) btn.disabled = false;
     if (state.minimized) setMinimized(false);
+    persistCallState();
   }
 
   function toggleCamera() {
@@ -744,6 +831,8 @@
     clearTimeout(state.ringTimer);
     clearTimeout(state.timer);
     clearInterval(state.timer);
+    clearTimeout(state.discTimer);
+    clearResume();
     if (state.pc) { try { state.pc.ontrack = null; state.pc.onicecandidate = null; state.pc.close(); } catch (e) {} }
     stopLocal();
     releaseWakeLock();
@@ -756,7 +845,7 @@
     Object.assign(state, {
       call: null, role: null, peerUser: null, pc: null, localStream: null, remoteStream: null,
       cameraTrack: null, screenStream: null, pendingCandidates: [], haveRemoteDesc: false,
-      timer: null, ringTimer: null, startedAt: null, muted: false, camOff: false, sharing: false,
+      timer: null, ringTimer: null, discTimer: null, startedAt: null, muted: false, camOff: false, sharing: false,
       minimized: false, mediaType: 'audio',
       facingMode: 'user',
     });
@@ -772,6 +861,8 @@
     // A page opened from a call push notification carries ?call=ID (and
     // action=answer from the Answer button). The invite itself was SSE-only and
     // this device missed it, so pull the still-ringing call from the server.
+    // The id is stashed in sessionStorage so it survives the session-resurrect
+    // reload performed by requireAuth when the app was fully closed.
     let autoAnswerId = null;
     try {
       const params = new URLSearchParams(location.search);
@@ -782,8 +873,23 @@
         const qs = params.toString();
         history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
       }
+      if (autoAnswerId) sessionStorage.setItem('ck_auto_answer', String(autoAnswerId));
+      else autoAnswerId = sessionStorage.getItem('ck_auto_answer');
     } catch (e) {}
-    checkPendingCall(autoAnswerId);
+
+    // If the client session markers are gone (app was closed), requireAuth is
+    // busy resurrecting the session from the auth cookie and will reload the
+    // page; starting a call now would be torn down by that reload. The stashed
+    // auto-answer id picks the call up right after the reload instead.
+    const sessionLive = (typeof Session === 'undefined') || Session.isValid();
+
+    // 1) An active call from the previous page (in-app navigation) takes
+    //    priority; 2) otherwise look for a ringing invite this page missed.
+    if (sessionLive) {
+      tryResumeCall().then((resumed) => {
+        if (!resumed) checkPendingCall(autoAnswerId);
+      }).catch(() => checkPendingCall(autoAnswerId));
+    }
     // Re-check whenever the SSE stream (re)connects: any invite sent while this
     // device was asleep/offline never arrived as an event.
     RT.on('ready', () => checkPendingCall(null));
@@ -802,15 +908,11 @@
     document.addEventListener('touchstart', resumeMedia, { passive: true });
     document.addEventListener('click', resumeMedia, true);
 
-    // Leaving the page for real (navigation/close) must end the call so the
-    // peer isn't left hanging. sendBeacon survives page teardown; the JWT
-    // travels in the httpOnly cookie which beacons include on same-origin.
-    const beaconEnd = () => {
-      if (!state.call) return;
-      try { navigator.sendBeacon && navigator.sendBeacon(`/api/calls/${state.call.id}/end`); } catch (e) {}
-    };
-    window.addEventListener('pagehide', beaconEnd);
-    window.addEventListener('beforeunload', beaconEnd);
+    // Navigating away does NOT end an active call — it's snapshotted here and
+    // the next page resumes it (see tryResumeCall). If the user actually
+    // leaves the app, the peer's reconnect grace timer ends the call instead.
+    window.addEventListener('pagehide', persistCallState);
+    window.addEventListener('beforeunload', persistCallState);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
