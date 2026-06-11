@@ -1,6 +1,6 @@
-# Pronet
+# Connectik
 
-LinkedIn-style social platform — Node.js + Express + Supabase Postgres.
+Connectik (repo: Pronet) — human-centric professional network. Node.js + Express + Supabase Postgres.
 
 ## Local dev
 

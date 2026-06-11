@@ -4,83 +4,192 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Connectik — Connect, Collaborate, Grow</title>
+  <meta name="description" content="Connectik is the human-centric professional network: live feed, smart connections, messaging, calls and AI career tools." />
   <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/gateway.css" />
 </head>
-<body>
-  <header class="hero">
-    <nav class="nav">
-      <div class="nav-left">
-        <a class="brand" href="/">P</a>
-        <div class="nav-links">
-          <a href="#">Home</a><a href="#">About</a><a href="#">Services</a><a href="#">Contact</a><a href="#">Blog</a>
-        </div>
-        <button class="menu-icon" aria-label="menu">☰</button>
+<body class="gw-body">
+
+  <!-- Live network backdrop (painted by gateway.js) -->
+  <canvas id="nodes-canvas" aria-hidden="true"></canvas>
+
+  <!-- ======================= GATEWAY (logged-out view) ======================= -->
+  <div id="login-container">
+
+    <nav class="gw-nav" aria-label="Landing">
+      <a class="gw-brand" href="/" aria-label="Connectik home">
+        <svg viewBox="0 0 512 512" aria-hidden="true">
+          <defs>
+            <linearGradient id="gwBrandMint" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+            </linearGradient>
+          </defs>
+          <rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/>
+          <rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/>
+          <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#gwBrandMint)" stroke-width="32"/>
+          <circle cx="256" cy="256" r="14" fill="#ffffff"/>
+        </svg>
+        Connectik
+      </a>
+
+      <div class="gw-tabs" role="tablist" aria-label="Sections">
+        <button class="gw-tab active" type="button" data-panel="home" role="tab" aria-selected="true">Home</button>
+        <button class="gw-tab" type="button" data-panel="about" role="tab" aria-selected="false">About</button>
+        <button class="gw-tab" type="button" data-panel="features" role="tab" aria-selected="false">Features</button>
+        <button class="gw-tab" type="button" data-panel="contact" role="tab" aria-selected="false">Contact</button>
       </div>
-      <div class="nav-right">
-        <a href="#login" class="btn">Sign In</a>
-        <a href="/signup.html" class="btn btn-primary">Join Now</a>
-      </div>
+
+      <a class="gw-join" href="/signup.html">Join Now</a>
     </nav>
-    <div class="hero-inner">
-      <span class="pill">Unlock Your Professional Potential Today <a href="#">Discover More</a></span>
-      <h1>Connect, Collaborate, and<br/>Grow Your Network</h1>
-      <p>Join our community of professionals and enhance your career opportunities.</p>
-      <div class="hero-cta">
-        <a href="#" class="btn btn-outline">Learn More</a>
-        <a href="/signup.html" class="btn btn-primary">Get Started Now</a>
-      </div>
+
+    <main class="gw-main">
+
+      <!-- ---------------- HOME: hero + gateway form ---------------- -->
+      <section class="gw-panel active" id="panel-home">
+        <div class="gw-hero">
+          <span class="gw-pill">A human-centric professional network</span>
+          <h1>Connect, collaborate,<br/>and <b>grow together</b>.</h1>
+          <p>Connectik links you to the people, conversations and opportunities that move your career forward — with live messaging, calls and AI career tools built in.</p>
+          <ul class="gw-hero-points">
+            <li><span class="dot">✓</span> Smart, semantic people matching</li>
+            <li><span class="dot">✓</span> Realtime chat, audio &amp; video calls</li>
+            <li><span class="dot">✓</span> AI profile, post and interview coaching</li>
+          </ul>
+        </div>
+
+        <div class="gw-card">
+          <!-- Interactive Link Visualizer: the two halves of the Infinite Link
+               draw together as you sign in, fusing when access is granted. -->
+          <div class="gw-visualizer" id="link-visualizer" aria-hidden="true">
+            <svg viewBox="0 0 400 160" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="gwVizMint" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+                </linearGradient>
+              </defs>
+              <rect class="interactive-link-left"  x="90"  y="30" width="110" height="100" rx="45" fill="none" stroke="#ffffff" stroke-width="24"/>
+              <rect class="interactive-link-right" x="200" y="30" width="110" height="100" rx="45" fill="none" stroke="url(#gwVizMint)" stroke-width="24"/>
+              <circle class="interactive-center-hub" cx="200" cy="80" r="12" fill="#ffffff"/>
+            </svg>
+          </div>
+
+          <form id="login-form" novalidate autocomplete="on">
+            <div class="gw-field">
+              <label for="email">Email Address</label>
+              <input id="email" name="email" type="email" class="gw-input" placeholder="name@domain.com"
+                     autocomplete="email" required />
+            </div>
+            <div class="gw-field">
+              <label for="password">Security Key</label>
+              <input id="password" name="password" type="password" class="gw-input" placeholder="••••••••••••"
+                     autocomplete="current-password" required />
+            </div>
+            <div class="gw-row">
+              <span class="gw-hint">Browser sessions idle out after 5 minutes.</span>
+              <a href="#" class="gw-link" id="forgot-link">Forgot key?</a>
+            </div>
+            <p id="login-error" class="gw-error" role="alert"></p>
+            <button class="gw-connect" type="submit">Initialize Connect</button>
+            <button type="button" id="google-btn" class="gw-google">
+              <span style="font-weight:800;color:#4285F4">G</span> Sign in with Google
+            </button>
+            <p class="gw-alt">New to Connectik? <a href="/signup.html">Create your account</a></p>
+          </form>
+
+          <!-- Inline email-verification (OTP) step, shown when an unverified user tries to log in -->
+          <div id="login-otp" style="display:none">
+            <h2>Verify your email</h2>
+            <p class="gw-sub">Enter the 6-digit code we just emailed to <strong id="login-otp-email"></strong>.</p>
+            <div class="gw-field">
+              <input id="login-otp-input" type="text" class="gw-input" inputmode="numeric" autocomplete="one-time-code"
+                     maxlength="6" placeholder="123456" style="letter-spacing:8px;font-size:20px;text-align:center" />
+            </div>
+            <p id="login-otp-error" class="gw-error" role="alert"></p>
+            <button class="gw-connect" id="login-otp-verify" type="button">Verify &amp; continue</button>
+            <p class="gw-alt">
+              <a id="login-otp-resend" href="#">Resend code</a>
+              &nbsp;·&nbsp; <a id="login-otp-cancel" href="#">Back to login</a>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------- ABOUT ---------------- -->
+      <section class="gw-panel" id="panel-about">
+        <div class="gw-section">
+          <h2>Networking that feels human.</h2>
+          <p class="gw-lead">Connectik was built on a simple idea: your professional network should work like a living thing — alive, responsive and personal. Every connection is a real link between two people, not a number on a counter. We pair a fast, distraction-free feed with realtime messaging and calls, then add a layer of AI that works for you — never on you.</p>
+          <div class="gw-grid">
+            <div class="gw-tile"><div class="ic">🧭</div><h3>Our mission</h3><p>Make meaningful professional relationships effortless to start and easy to keep.</p></div>
+            <div class="gw-tile"><div class="ic">🤝</div><h3>Real connections</h3><p>Accept-based connecting, presence you control, and privacy settings that actually mean it.</p></div>
+            <div class="gw-tile"><div class="ic">⚡</div><h3>Fast by design</h3><p>No frameworks, no bloat — a hand-tuned web app that flies on any phone.</p></div>
+          </div>
+          <div class="gw-stat-row">
+            <div class="gw-stat"><b>1-to-1</b><span>audio &amp; video calls</span></div>
+            <div class="gw-stat"><b>Live</b><span>messages &amp; presence</span></div>
+            <div class="gw-stat"><b>10+</b><span>built-in AI career tools</span></div>
+          </div>
+          <a class="gw-cta-inline" href="/signup.html">Start your network →</a>
+        </div>
+      </section>
+
+      <!-- ---------------- FEATURES ---------------- -->
+      <section class="gw-panel" id="panel-features">
+        <div class="gw-section">
+          <h2>Everything you need to grow.</h2>
+          <p class="gw-lead">One app for your feed, your people and your next opportunity — on the web and as an installable mobile app.</p>
+          <div class="gw-grid">
+            <div class="gw-tile"><div class="ic">📰</div><h3>Smart feed</h3><p>Posts, reactions, reposts and rich media from the people you're connected to.</p></div>
+            <div class="gw-tile"><div class="ic">💬</div><h3>Realtime messaging</h3><p>Read receipts, reactions, replies, attachments — delivered live.</p></div>
+            <div class="gw-tile"><div class="ic">📞</div><h3>Calls &amp; screen share</h3><p>Crystal-clear audio and video calls with one-tap camera upgrade, right in the app.</p></div>
+            <div class="gw-tile"><div class="ic">🧠</div><h3>Smart Match</h3><p>Semantic matching surfaces the people you should actually meet.</p></div>
+            <div class="gw-tile"><div class="ic">✨</div><h3>AI career coach</h3><p>Profile enhancer, post writer, mock interviews and ATS resume scoring.</p></div>
+            <div class="gw-tile"><div class="ic">📱</div><h3>Installable app</h3><p>Add Connectik to your home screen for push notifications and an app-native feel.</p></div>
+          </div>
+          <a class="gw-cta-inline" href="/signup.html">Get started free →</a>
+        </div>
+      </section>
+
+      <!-- ---------------- CONTACT ---------------- -->
+      <section class="gw-panel" id="panel-contact">
+        <div class="gw-section">
+          <h2>Say hello.</h2>
+          <p class="gw-lead">Questions, feedback or partnership ideas — we read everything.</p>
+          <div class="gw-grid">
+            <div class="gw-tile"><div class="ic">📮</div><h3>Email</h3><p><a class="gw-link" href="mailto:hello@connectik.app">hello@connectik.app</a></p></div>
+            <div class="gw-tile"><div class="ic">🛟</div><h3>Support</h3><p><a class="gw-link" href="mailto:support@connectik.app">support@connectik.app</a></p></div>
+            <div class="gw-tile"><div class="ic">📍</div><h3>HQ</h3><p>123 Networking Ave, City, State</p></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ============== APP SHELL (post-auth launch state) ============== -->
+  <div id="app-shell" hidden>
+    <div class="gw-launch">
+      <svg viewBox="0 0 512 512" aria-hidden="true">
+        <defs>
+          <linearGradient id="gwShellMint" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#34d399"/><stop offset="100%" stop-color="#059669"/>
+          </linearGradient>
+        </defs>
+        <rect x="32" y="32" width="448" height="448" rx="128" fill="#4f46e5"/>
+        <rect x="136" y="196" width="140" height="120" rx="60" fill="none" stroke="#ffffff" stroke-width="32"/>
+        <rect x="236" y="196" width="140" height="120" rx="60" fill="none" stroke="url(#gwShellMint)" stroke-width="32"/>
+        <circle cx="256" cy="256" r="14" fill="#ffffff"/>
+      </svg>
+      <h2>Welcome to <b>Connectik</b></h2>
+      <p>Link established — opening your network…</p>
+      <div class="gw-progress"><span></span></div>
+      <nav class="gw-quick" aria-label="Quick destinations">
+        <a href="/feed.html">Home</a>
+        <a href="/network.html">Network</a>
+        <a href="/lounge.html">Lounge</a>
+        <a href="/messages.html">Messages</a>
+      </nav>
     </div>
-  </header>
-
-  <section id="login" class="login-card">
-    <h2>Welcome Back!</h2>
-    <p class="sub">Log in to your professional network and connect with peers.</p>
-    <form id="login-form" novalidate autocomplete="on">
-      <div class="field">
-        <label for="email">Email Address</label>
-        <input id="email" name="email" type="email" placeholder="you@example.com"
-               autocomplete="email" required />
-      </div>
-      <div class="field">
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" placeholder="••••••••••"
-               autocomplete="current-password" required />
-      </div>
-      <div class="row-between">
-        <span class="muted-small">Your session ends after 5 minutes of inactivity.</span>
-        <a href="#" class="link" id="forgot-link">Forgot Password?</a>
-      </div>
-      <p id="login-error" class="error"></p>
-      <button class="btn btn-primary btn-block" type="submit">Sign In</button>
-      <button type="button" id="google-btn" class="btn-google">
-        <span style="font-weight:800;color:#4285F4">G</span> Sign in with Google
-      </button>
-      <p class="center-muted">Don't have an account? <a class="link" href="/signup.html">Create one now!</a></p>
-    </form>
-
-    <!-- Inline email-verification (OTP) step, shown when an unverified user tries to log in -->
-    <div id="login-otp" style="display:none">
-      <h2>Verify your email</h2>
-      <p class="sub">Enter the 6-digit code we just emailed to <strong id="login-otp-email"></strong>.</p>
-      <div class="field">
-        <input id="login-otp-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:8px;font-size:20px;text-align:center" />
-      </div>
-      <p id="login-otp-error" class="error"></p>
-      <button class="btn btn-primary btn-block" id="login-otp-verify" type="button">Verify &amp; continue</button>
-      <p class="center-muted">
-        <a class="link" id="login-otp-resend" href="#">Resend code</a>
-        &nbsp;·&nbsp; <a class="link" id="login-otp-cancel" href="#">Back to login</a>
-      </p>
-    </div>
-  </section>
-
-  <section class="stay">
-    <h2>Stay<br/>Connected</h2>
-  </section>
-  <div class="contact-grid">
-    <div><h4>Address</h4><p>123 Networking Ave, City, State</p></div>
-    <div><h4>Phone</h4><p>+1 (555) 123-4567</p></div>
-    <div><h4>Email</h4><p>info@professionalsnetwork.com</p></div>
   </div>
 
   <!-- Forgot password modal -->
@@ -148,7 +257,15 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="/js/supabase-config.js"></script>
   <script src="/js/app.js"></script>
+  <script src="/js/gateway.js"></script>
   <script>
+    // Route a successful auth through the Gateway launch animation (link merge
+    // + app-shell reveal) and fall back to a hard redirect if it's missing.
+    function enterApp(href) {
+      if (window.Gateway && Gateway.launch) Gateway.launch(href || '/feed.html');
+      else location.href = href || '/feed.html';
+    }
+
     (async () => {
       // If a valid session exists, go to feed; else stay on landing page.
       if (Session.isValid()) { location.href = '/feed.html'; return; }
@@ -171,7 +288,7 @@
         const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
         Session.setToken(data.token);
         setMe(data.user);
-        location.href = '/feed.html';
+        enterApp('/feed.html');
         return;
       } catch (ex) {
         const msg = (ex && ex.message) ? ex.message : '';
@@ -180,7 +297,7 @@
           showLoginOtp(email.toLowerCase());
           return;
         }
-        if (/too many/i.test(msg)) { err.textContent = msg; return; }
+        if (/too many/i.test(msg)) { err.textContent = msg; if (window.Gateway) Gateway.deny(); return; }
         // 2) Fallback to Supabase Auth for legacy accounts created before the
         //    backend OTP flow (they have no local bcrypt password to match).
         if (window.sb) {
@@ -189,12 +306,13 @@
             try {
               // Trade the Supabase token for our own httpOnly cookie session.
               await exchangeSupabaseSession(sd.session.access_token);
-              location.href = '/feed.html';
+              enterApp('/feed.html');
               return;
             } catch (e2) { Session.clear(); }
           }
         }
         err.textContent = 'Invalid email or password.';
+        if (window.Gateway) Gateway.deny();
       }
     });
 
@@ -223,7 +341,7 @@
         const data = await api('/api/auth/signup/verify-otp', { method: 'POST', body: { email: loginOtpEmail, otp } });
         Session.setToken(data.token);
         setMe(data.user);
-        location.href = '/feed.html';
+        enterApp('/feed.html');
       } catch (ex) {
         e.textContent = (ex && ex.message) || 'Verification failed.';
         btn.disabled = false; btn.textContent = 'Verify & continue';
