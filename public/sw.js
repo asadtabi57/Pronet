@@ -4,7 +4,7 @@
 //   • navigations    -> network-first, fall back to cached page, then offline.html
 //   • static assets  -> stale-while-revalidate (instant load, refresh in bg)
 //   • cross-origin   -> passthrough (CDNs, Gemini, Supabase handle themselves)
-const VERSION = 'pronet-v4';
+const VERSION = 'connectik-v6';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 
@@ -88,7 +88,7 @@ self.addEventListener('push', (event) => {
     body: data.body || '',
     icon: data.icon || '/icons/icon-192-ck1.png',
     badge: data.badge || '/icons/icon-192-ck1.png',
-    tag: data.tag || 'pronet',
+    tag: data.tag || 'connectik',
     renotify: true,
     requireInteraction: isCall ? true : !!data.requireInteraction,
     data: { url: data.url || '/notifications.html', type: data.type, callId: data.callId },
@@ -107,7 +107,7 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   const d = event.notification.data || {};
-  const url = d.url || '/notifications.html';
+  let url = d.url || '/notifications.html';
   event.notification.close();
 
   // Decline an incoming call straight from the notification.
@@ -118,7 +118,17 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // Answer / tap → focus an existing window or open the call/target URL.
+  // Answer → tell the opened page to auto-accept this call. The page (calls.js)
+  // reads ?call=ID&action=answer, confirms the call is still ringing via
+  // /api/calls/pending, and accepts it.
+  if (event.action === 'answer' && d.callId) {
+    if (url.indexOf('call=') === -1) {
+      url += (url.indexOf('?') === -1 ? '?' : '&') + 'call=' + d.callId;
+    }
+    url += '&action=answer';
+  }
+
+  // Focus an existing window or open the call/target URL.
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {

@@ -832,15 +832,31 @@
     try { ({ logs } = await api(`/api/calls/logs/${userId}`)); } catch (e) { return; }
     const body = document.getElementById('conv-body');
     if (!body || !logs.length) return;
-    // Render newest call as a subtle centered line at the bottom of the thread.
+    if (active !== userId) return; // conversation switched while we were fetching
     body.querySelectorAll('.call-log-line').forEach(n => n.remove());
-    const html = logs.slice(0, 8).reverse().map(c => {
+    const emptyEl = body.querySelector('.empty');
+    if (emptyEl) emptyEl.remove();
+    // Only auto-scroll if the user is already reading the latest messages.
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 200;
+    // Weave each call into the thread at its chronological position (message
+    // bubbles carry data-created) instead of dumping every old call at the
+    // bottom of the conversation.
+    const recent = logs.slice(0, 8).sort((a, b) => a.created_at - b.created_at);
+    for (const c of recent) {
       const icon = c.call_type === 'video' ? '🎥' : '📞';
       const dir = c.caller_id === me.id ? 'out' : 'in';
-      return `<div class="call-log-line ${dir}"><span class="cll-icon">${icon}</span>${escapeHTML(callLogLabel(c))} · ${timeAgo(c.created_at)}</div>`;
-    }).join('');
-    body.insertAdjacentHTML('beforeend', html);
-    scrollConvToBottom();
+      const el = document.createElement('div');
+      el.className = `call-log-line ${dir}`;
+      el.dataset.created = c.created_at;
+      el.innerHTML = `<span class="cll-icon">${icon}</span>${escapeHTML(callLogLabel(c))} · ${timeAgo(c.created_at)}`;
+      const nodes = body.querySelectorAll('.msg-item, .call-log-line');
+      let before = null;
+      for (const n of nodes) {
+        if (Number(n.dataset.created || 0) > c.created_at) { before = n; break; }
+      }
+      if (before) body.insertBefore(el, before); else body.appendChild(el);
+    }
+    if (nearBottom) scrollConvToBottom();
   }
 
   // When a call ends, refresh the call-log lines in the open conversation.

@@ -28,11 +28,17 @@
     muted: false,
     camOff: false,
     sharing: false,
+    minimized: false,
+    mediaType: 'audio', // current LOCAL media mode ('audio' can upgrade to 'video' mid-call)
     facingMode: 'user', // 'user' (front) | 'environment' (back)
   };
+  let wakeLock = null; // screen wake lock held while a call is active
 
   // ---------- DOM ----------
-  let elOverlay, elIncoming, ringAudio, vibrateTimer = null;
+  let elOverlay, elIncoming, ringAudio, remoteAudioEl, vibrateTimer = null;
+
+  const SVG_MIN = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  const SVG_EXPAND = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>';
 
   function buildUI() {
     // In-call window
@@ -42,26 +48,45 @@
     elOverlay.innerHTML = `
       <div class="call-window">
         <div class="call-stage">
-          <video class="call-remote" id="call-remote" autoplay playsinline></video>
+          <video class="call-remote" id="call-remote" autoplay playsinline muted></video>
           <div class="call-remote-audio" id="call-remote-audio" hidden>
             <div class="call-avatar" id="call-avatar"></div>
             <div class="call-peer-name" id="call-peer-name"></div>
           </div>
           <video class="call-local" id="call-local" autoplay playsinline muted></video>
           <div class="call-topbar">
+            <button class="call-min-btn" id="ctrl-min" title="Minimize" aria-label="Minimize call">${SVG_MIN}</button>
             <span class="call-status-pill" id="call-status">Connecting…</span>
             <span class="call-timer" id="call-timer" hidden>00:00</span>
           </div>
         </div>
         <div class="call-controls" id="call-controls">
           <button class="call-ctrl" id="ctrl-mute" title="Mute"><span class="ci">🎤</span><small>Mute</small></button>
+          <button class="call-ctrl" id="ctrl-video" title="Turn on camera" style="display:none"><span class="ci">📹</span><small>Video</small></button>
           <button class="call-ctrl" id="ctrl-cam" title="Camera"><span class="ci">📷</span><small>Camera</small></button>
           <button class="call-ctrl" id="ctrl-flip" title="Switch camera" style="display:none"><span class="ci">🔄</span><small>Flip</small></button>
           <button class="call-ctrl" id="ctrl-screen" title="Share screen"><span class="ci">🖥️</span><small>Share</small></button>
           <button class="call-ctrl call-end" id="ctrl-end" title="End call"><span class="ci">📞</span><small>End</small></button>
         </div>
+      </div>
+      <div class="call-mini" id="call-mini" role="button" title="Return to call" aria-label="Return to call">
+        <span class="cm-avatar" id="cm-avatar"></span>
+        <span class="cm-info"><b id="cm-name"></b><span class="cm-sub" id="cm-sub">Connected</span></span>
+        <span class="cm-timer" id="cm-timer">00:00</span>
+        <span class="cm-expand">${SVG_EXPAND}</span>
+        <button class="cm-end" id="cm-end" title="End call" aria-label="End call">📞</button>
       </div>`;
     document.body.appendChild(elOverlay);
+
+    // Remote audio lives OUTSIDE the call window: <audio> keeps playing while
+    // the page is hidden (notification shade pulled down, screen briefly off,
+    // app switched) where mobile browsers pause <video> elements. The remote
+    // <video> above is muted — sound only ever comes from this element.
+    remoteAudioEl = document.createElement('audio');
+    remoteAudioEl.id = 'call-remote-sound';
+    remoteAudioEl.autoplay = true;
+    remoteAudioEl.setAttribute('playsinline', '');
+    elOverlay.appendChild(remoteAudioEl);
 
     // Incoming call modal
     elIncoming = document.createElement('div');
@@ -83,10 +108,14 @@
     ringAudio.preload = 'auto';
 
     document.getElementById('ctrl-mute').onclick = toggleMute;
+    document.getElementById('ctrl-video').onclick = upgradeToVideo;
     document.getElementById('ctrl-cam').onclick = toggleCamera;
     document.getElementById('ctrl-flip').onclick = switchCamera;
     document.getElementById('ctrl-screen').onclick = toggleScreen;
     document.getElementById('ctrl-end').onclick = () => endCall(true);
+    document.getElementById('ctrl-min').onclick = () => setMinimized(true);
+    document.getElementById('call-mini').onclick = (e) => { if (!e.target.closest('.cm-end')) setMinimized(false); };
+    document.getElementById('cm-end').onclick = (e) => { e.stopPropagation(); endCall(true); };
     document.getElementById('inc-accept').onclick = acceptIncoming;
     document.getElementById('inc-reject').onclick = rejectIncoming;
   }
@@ -100,9 +129,48 @@
   function escapeAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
 
   // ---------- Helpers ----------
-  function setStatus(t) { const e = document.getElementById('call-status'); if (e) e.textContent = t; }
+  function setStatus(t) {
+    const e = document.getElementById('call-status'); if (e) e.textContent = t;
+    const m = document.getElementById('cm-sub'); if (m) m.textContent = t;
+  }
   function showOverlay() { elOverlay.classList.add('open'); }
-  function hideOverlay() { elOverlay.classList.remove('open'); }
+  function hideOverlay() { elOverlay.classList.remove('open'); setMinimized(false); }
+
+  // Minimized mode: the fullscreen call window collapses to a floating pill so
+  // the user can keep browsing the app (WhatsApp-style) while the call runs.
+  function setMinimized(min) {
+    state.minimized = !!min;
+    elOverlay.classList.toggle('minimized', state.minimized);
+    if (state.minimized) {
+      const u = state.peerUser || {};
+      document.getElementById('cm-avatar').innerHTML = avatarMarkup(u);
+      document.getElementById('cm-name').textContent = u.name || 'In call';
+    }
+  }
+
+  // Keep the screen awake during a call (released in cleanup). Re-acquired on
+  // return to foreground — the lock is auto-released when the page hides.
+  async function acquireWakeLock() {
+    try {
+      if (!state.call || !navigator.wakeLock) return;
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (e) { /* unsupported / denied — non-fatal */ }
+  }
+  function releaseWakeLock() {
+    try { if (wakeLock) wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+
+  // Mobile browsers pause media elements when the page is hidden (notification
+  // shade, app switcher). Nudge everything back to playing whenever we regain
+  // foreground or the user touches the page.
+  function resumeMedia() {
+    if (!state.call) return;
+    [remoteAudioEl, document.getElementById('call-remote'), document.getElementById('call-local')].forEach(el => {
+      if (el && el.srcObject && el.paused) { try { el.play().catch(() => {}); } catch (e) {} }
+    });
+  }
+
   function showIncoming() {
     elIncoming.classList.add('open');
     try { ringAudio.loop = true; ringAudio.currentTime = 0; ringAudio.play().catch(() => {}); } catch (e) {}
@@ -127,6 +195,7 @@
   }
 
   function startTimer() {
+    if (state.timer) return;
     state.startedAt = Date.now();
     const t = document.getElementById('call-timer');
     t.hidden = false;
@@ -135,6 +204,8 @@
       const mm = String(Math.floor(s / 60)).padStart(2, '0');
       const ss = String(s % 60).padStart(2, '0');
       t.textContent = `${mm}:${ss}`;
+      const mt = document.getElementById('cm-timer');
+      if (mt) mt.textContent = `${mm}:${ss}`;
     }, 1000);
   }
 
@@ -187,7 +258,13 @@
     state.remoteStream = new MediaStream();
     pc.ontrack = (ev) => {
       ev.streams[0].getTracks().forEach(tr => state.remoteStream.addTrack(tr));
+      // Video renders in the (muted) <video>; audio plays through the dedicated
+      // <audio> element which mobile browsers keep alive in the background.
       document.getElementById('call-remote').srcObject = state.remoteStream;
+      if (remoteAudioEl.srcObject !== state.remoteStream) {
+        remoteAudioEl.srcObject = state.remoteStream;
+      }
+      try { remoteAudioEl.play().catch(() => {}); } catch (e) {}
       const track = ev.track;
       if (track) {
         // A video track often arrives muted and unmutes a beat later; re-sync
@@ -266,21 +343,28 @@
   function setupCallWindow(callType) {
     document.getElementById('call-timer').hidden = true;
     document.getElementById('call-timer').textContent = '00:00';
+    const mt = document.getElementById('cm-timer'); if (mt) mt.textContent = '00:00';
     state.muted = false; state.camOff = false; state.sharing = false;
+    state.mediaType = callType;
+    setMinimized(false);
     updateCtrlButtons(callType);
     attachLocalVideo();
     // audio-only → hide remote video element, show avatar
     document.getElementById('call-remote').hidden = (callType !== 'video');
     document.getElementById('call-remote-audio').hidden = (callType === 'video');
     showOverlay();
+    acquireWakeLock();
   }
 
   function updateCtrlButtons(callType) {
     const camBtn = document.getElementById('ctrl-cam');
     const screenBtn = document.getElementById('ctrl-screen');
     const flipBtn = document.getElementById('ctrl-flip');
+    const videoBtn = document.getElementById('ctrl-video');
     const isVideo = callType === 'video';
     camBtn.style.display = isVideo ? '' : 'none';
+    // Audio call → offer a one-tap upgrade to video (WhatsApp-style).
+    videoBtn.style.display = isVideo ? 'none' : '';
     // Hide the screen-share button entirely where the browser can't capture a
     // display surface (most phones) so users aren't offered a dead control.
     const canShare = navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function';
@@ -313,6 +397,7 @@
   // ---------- Incoming ----------
   function onInvite(call) {
     if (state.call) {
+      if (Number(state.call.id) === Number(call.id)) return; // already showing this invite
       // Already busy → auto-reject.
       api(`/api/calls/${call.id}/reject`, { method: 'POST' }).catch(() => {});
       return;
@@ -327,9 +412,37 @@
     state.ringTimer = setTimeout(() => { if (state.role === 'receiver' && state.call && state.call.status === 'ringing') hideIncoming(); }, RING_TIMEOUT_MS + 3000);
   }
 
+  // Close any OS "incoming call" notifications for this caller (the SSE invite
+  // and the web push race; whichever the user did NOT interact with lingers).
+  function closeCallNotifications(callerId) {
+    try {
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.ready.then(reg => {
+        if (!reg.getNotifications) return;
+        reg.getNotifications({ tag: 'call:' + callerId }).then(ns => ns.forEach(n => n.close())).catch(() => {});
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  // The SSE 'call_invite' only reaches pages that were already open. A page
+  // freshly opened from a push notification (app was closed) must pull the
+  // ringing call itself. `autoAnswer` comes from the notification's Answer
+  // button (?call=ID&action=answer).
+  async function checkPendingCall(autoAnswerId) {
+    if (state.call) return;
+    let call = null;
+    try { ({ call } = await api('/api/calls/pending')); } catch (e) { return; }
+    if (!call || state.call) return;
+    onInvite(call);
+    if (autoAnswerId && Number(autoAnswerId) === Number(call.id)) {
+      acceptIncoming();
+    }
+  }
+
   async function acceptIncoming() {
     hideIncoming();
     const callType = state.call.call_type;
+    closeCallNotifications(state.peerUser && state.peerUser.id);
     try {
       state.localStream = await getMedia(callType === 'video');
     } catch (e) {
@@ -353,7 +466,10 @@
 
   function rejectIncoming() {
     hideIncoming();
-    if (state.call) api(`/api/calls/${state.call.id}/reject`, { method: 'POST' }).catch(() => {});
+    if (state.call) {
+      closeCallNotifications(state.peerUser && state.peerUser.id);
+      api(`/api/calls/${state.call.id}/reject`, { method: 'POST' }).catch(() => {});
+    }
     cleanup();
   }
 
@@ -378,8 +494,10 @@
       cleanup();
     } else if (event === 'call_cancel') {
       hideIncoming();
+      closeCallNotifications(state.peerUser && state.peerUser.id);
       cleanup();
     } else if (event === 'call_end') {
+      closeCallNotifications(state.peerUser && state.peerUser.id);
       cleanup();
     } else if (event === 'call_signal') {
       await onSignal(data);
@@ -410,6 +528,11 @@
       setStatus(((state.peerUser && state.peerUser.name) || 'Peer') + ' is sharing screen');
     } else if (type === 'screen_share_stopped') {
       setStatus('Connected');
+    } else if (type === 'video_upgrade') {
+      // Peer turned their camera on mid-call. Their renegotiation offer carries
+      // the track; here we just surface it and keep offering our own upgrade.
+      toast(((state.peerUser && state.peerUser.name) || 'Your contact') + ' turned on their camera.');
+      if (state.minimized) setMinimized(false);
     }
   }
 
@@ -421,6 +544,52 @@
     const b = document.getElementById('ctrl-mute');
     b.classList.toggle('off', state.muted);
     b.querySelector('small').textContent = state.muted ? 'Unmute' : 'Mute';
+  }
+
+  // Upgrade an audio call to video mid-call (WhatsApp-style). Adds a camera
+  // track to the existing peer connection and renegotiates; the peer's offer
+  // handler already supports renegotiation, so their side lights up
+  // automatically. Their own call stays audio-only until they also upgrade.
+  async function upgradeToVideo() {
+    if (!state.call || !state.localStream) return;
+    if (state.localStream.getVideoTracks().length) return; // already video
+    const btn = document.getElementById('ctrl-video');
+    if (btn) btn.disabled = true;
+    let camStream;
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: state.facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      toast('Could not access your camera. Check permissions.');
+      return;
+    }
+    const track = camStream.getVideoTracks()[0];
+    if (!track) { if (btn) btn.disabled = false; return; }
+    state.localStream.addTrack(track);
+    try {
+      if (state.pc) {
+        state.pc.addTrack(track, state.localStream);
+        const offer = await state.pc.createOffer();
+        await state.pc.setLocalDescription(offer);
+        signal('webrtc_offer', offer);
+        signal('video_upgrade', {});
+      }
+    } catch (e) {
+      // Renegotiation failed — remove the track so state stays consistent.
+      try { state.localStream.removeTrack(track); track.stop(); } catch (e2) {}
+      if (btn) btn.disabled = false;
+      toast('Could not switch to video.');
+      return;
+    }
+    state.mediaType = 'video';
+    state.camOff = false;
+    attachLocalVideo();
+    updateCtrlButtons('video');
+    if (btn) btn.disabled = false;
+    if (state.minimized) setMinimized(false);
   }
 
   function toggleCamera() {
@@ -577,14 +746,18 @@
     clearInterval(state.timer);
     if (state.pc) { try { state.pc.ontrack = null; state.pc.onicecandidate = null; state.pc.close(); } catch (e) {} }
     stopLocal();
+    releaseWakeLock();
     hideOverlay();
     hideIncoming();
     const rv = document.getElementById('call-remote'); if (rv) rv.srcObject = null;
     const lv = document.getElementById('call-local'); if (lv) lv.srcObject = null;
+    if (remoteAudioEl) { try { remoteAudioEl.srcObject = null; } catch (e) {} }
+    const vb = document.getElementById('ctrl-video'); if (vb) vb.disabled = false;
     Object.assign(state, {
       call: null, role: null, peerUser: null, pc: null, localStream: null, remoteStream: null,
       cameraTrack: null, screenStream: null, pendingCandidates: [], haveRemoteDesc: false,
       timer: null, ringTimer: null, startedAt: null, muted: false, camOff: false, sharing: false,
+      minimized: false, mediaType: 'audio',
       facingMode: 'user',
     });
     // Refresh call logs in any open conversation.
@@ -595,7 +768,49 @@
   function init() {
     buildUI();
     RT.on('call', onCallEvent);
-    window.addEventListener('beforeunload', () => { if (state.call) { try { navigator.sendBeacon && endCall(true); } catch (e) {} } });
+
+    // A page opened from a call push notification carries ?call=ID (and
+    // action=answer from the Answer button). The invite itself was SSE-only and
+    // this device missed it, so pull the still-ringing call from the server.
+    let autoAnswerId = null;
+    try {
+      const params = new URLSearchParams(location.search);
+      if (params.get('call')) {
+        if (params.get('action') === 'answer') autoAnswerId = params.get('call');
+        // Strip the call params so a refresh doesn't re-trigger the flow.
+        params.delete('call'); params.delete('action');
+        const qs = params.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
+    } catch (e) {}
+    checkPendingCall(autoAnswerId);
+    // Re-check whenever the SSE stream (re)connects: any invite sent while this
+    // device was asleep/offline never arrived as an event.
+    RT.on('ready', () => checkPendingCall(null));
+
+    // Coming back to the foreground (notification shade closed, app switcher,
+    // screen back on): resume any paused media and re-acquire the wake lock.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.call) {
+        resumeMedia();
+        acquireWakeLock();
+      }
+    });
+    window.addEventListener('focus', resumeMedia);
+    // Autoplay-blocked audio (e.g. auto-answered from a notification) starts on
+    // the first interaction.
+    document.addEventListener('touchstart', resumeMedia, { passive: true });
+    document.addEventListener('click', resumeMedia, true);
+
+    // Leaving the page for real (navigation/close) must end the call so the
+    // peer isn't left hanging. sendBeacon survives page teardown; the JWT
+    // travels in the httpOnly cookie which beacons include on same-origin.
+    const beaconEnd = () => {
+      if (!state.call) return;
+      try { navigator.sendBeacon && navigator.sendBeacon(`/api/calls/${state.call.id}/end`); } catch (e) {}
+    };
+    window.addEventListener('pagehide', beaconEnd);
+    window.addEventListener('beforeunload', beaconEnd);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

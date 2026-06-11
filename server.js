@@ -2139,10 +2139,12 @@ app.post('/api/calls', authRequired, wrap(async (req, res) => {
   const dto = await callDTO(ins.rows[0], receiverId);
   sseSend(receiverId, 'call_invite', { call: dto });
   // OS push for the incoming call (rings the phone even if the app is closed).
+  // The URL carries the call id so a page opened from this notification can
+  // immediately pick the ringing call up via /api/calls/pending.
   push.sendToUser(receiverId, {
     title: req.user.name || 'Connectik',
     body: callType === 'video' ? '📹 Incoming video call' : '📞 Incoming call',
-    url: `/messages.html?user=${req.user.id}`,
+    url: `/messages.html?user=${req.user.id}&call=${Number(ins.rows[0].id)}`,
     tag: 'call:' + req.user.id,
     requireInteraction: true,
     type: 'call',
@@ -2216,7 +2218,8 @@ app.post('/api/calls/:id/signal', authRequired, wrap(async (req, res) => {
   if (error) return res.status(code).json({ error });
   const type = String((req.body && req.body.type) || '');
   const payload = (req.body && req.body.payload) || {};
-  const allowed = ['webrtc_offer', 'webrtc_answer', 'ice_candidate', 'screen_share_started', 'screen_share_stopped'];
+  const allowed = ['webrtc_offer', 'webrtc_answer', 'ice_candidate', 'screen_share_started', 'screen_share_stopped',
+    'video_upgrade', 'video_upgrade_accepted'];
   if (!allowed.includes(type)) return res.status(400).json({ error: 'Invalid signal type' });
   const other = Number(call.caller_id) === req.user.id ? Number(call.receiver_id) : Number(call.caller_id);
   await q(
@@ -2226,6 +2229,29 @@ app.post('/api/calls/:id/signal', authRequired, wrap(async (req, res) => {
   );
   sseSend(other, 'call_signal', { call_id: Number(call.id), type, payload, sender_id: req.user.id });
   res.json({ ok: true });
+}));
+
+// Current ringing call for me (receiver). Lets a page opened from a push
+// notification pick up an in-flight invite that was only ever sent over SSE
+// (which the device missed because the app was closed). Also tidies stale
+// ringing rows (caller tab died before it could cancel) into 'missed'.
+const CALL_RING_WINDOW_MS = 45 * 1000;
+app.get('/api/calls/pending', authRequired, wrap(async (req, res) => {
+  const now = Date.now();
+  await q(
+    `UPDATE calls SET status='missed', ended_at=$1
+      WHERE status='ringing' AND created_at < $2
+        AND (caller_id=$3 OR receiver_id=$3)`,
+    [now, now - CALL_RING_WINDOW_MS, req.user.id]
+  );
+  const r = await q(
+    `SELECT * FROM calls
+      WHERE receiver_id=$1 AND status='ringing' AND created_at >= $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [req.user.id, now - CALL_RING_WINDOW_MS]
+  );
+  if (r.rowCount === 0) return res.json({ call: null });
+  res.json({ call: await callDTO(r.rows[0], req.user.id) });
 }));
 
 // Call history with a specific user (last 30 days).

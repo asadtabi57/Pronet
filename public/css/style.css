@@ -2068,6 +2068,62 @@ body.app {
 .call-ctrl.off .ci { background: #475569; color: #fff; }
 .call-ctrl.call-end .ci { background: #dc2626; color: #fff; }
 .call-ctrl.call-end:hover .ci { background: #b91c1c; }
+.call-ctrl:disabled { opacity: 0.55; pointer-events: none; }
+
+/* Minimize button — top-left of the call stage */
+.call-min-btn {
+  position: absolute; left: 12px; top: 0;
+  width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); color: #fff;
+}
+.call-min-btn:hover { background: rgba(0, 0, 0, 0.65); }
+.call-min-btn:active { transform: scale(0.92); }
+
+/* Minimized call: the fullscreen window collapses to a floating pill and the
+   page behind becomes fully interactive again (WhatsApp-style). */
+.call-overlay.minimized {
+  inset: auto; background: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  pointer-events: none;
+}
+.call-overlay.minimized .call-window { display: none; }
+.call-mini {
+  display: none;
+  position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%;
+  transform: translateX(-50%);
+  z-index: 10002;
+  align-items: center; gap: 10px;
+  padding: 8px 10px 8px 8px; border-radius: 999px;
+  background: linear-gradient(135deg, #059669, #047857); color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  cursor: pointer; max-width: min(92vw, 400px);
+  animation: cmIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes cmIn {
+  from { transform: translateX(-50%) translateY(-16px); opacity: 0; }
+  to   { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+.call-overlay.minimized .call-mini { display: flex; pointer-events: auto; }
+.call-mini .cm-avatar { width: 30px; height: 30px; border-radius: 50%; overflow: hidden; flex: none; background: #1f2a3a; }
+.call-mini .cm-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.call-mini .cm-avatar .ci-letters {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 13px; font-weight: 700;
+}
+.call-mini .cm-info { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; text-align: left; }
+.call-mini .cm-info b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.call-mini .cm-sub { font-size: 11px; opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.call-mini .cm-timer { font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.95; flex: none; }
+.call-mini .cm-expand { display: flex; opacity: 0.85; flex: none; }
+.call-mini .cm-end {
+  width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer;
+  background: #dc2626; color: #fff; font-size: 15px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  transform: rotate(135deg);
+}
+.call-mini .cm-end:active { transform: rotate(135deg) scale(0.9); }
 
 /* Incoming call modal */
 .call-incoming {
